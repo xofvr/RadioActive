@@ -70,9 +70,7 @@ final class DetectorEngine {
     /// and map are never empty when real ratings cluster high — the hero surfaces the
     /// WORST nearby, not an absolute "< 3★" toxicity (which real UK data rarely hits).
     var contaminationFloor: Double {
-        let bs = localPlaces.map(\.badness).sorted()
-        guard !bs.isEmpty else { return 0.4 }
-        return max(0.35, min(0.6, bs[bs.count / 2]))
+        DetectorMath.contaminationFloor(badnesses: localPlaces.map(\.badness))
     }
 
     /// The worst local places — what the radar and map plot, and what the range chip
@@ -140,19 +138,14 @@ final class DetectorEngine {
     /// How hot a place reads given the current heading. Badness is the ceiling;
     /// aim/proximity only swing the needle within that place's band.
     func intensity(for p: Place, heading: Double) -> Double {
-        let badness = (5 - p.rating) / 5
-        let prox = max(0.15, 1 - Double(p.dist) / 800)
-        let face = (cos(angDiff(heading, p.bearing) * .pi / 180) + 1) / 2
-        let detection = prox * (0.4 + 0.6 * face)
-        let intensity = badness * (0.62 + 0.38 * detection) * sensitivity
-        return min(1, max(0, intensity))
+        DetectorMath.intensity(
+            badness: p.badness,
+            distance: Double(p.dist),
+            headingError: angDiff(heading, p.bearing),
+            sensitivity: sensitivity)
     }
 
-    func angDiff(_ a: Double, _ b: Double) -> Double {
-        var d = abs((a - b).truncatingRemainder(dividingBy: 360))
-        if d > 180 { d = 360 - d }
-        return d
-    }
+    func angDiff(_ a: Double, _ b: Double) -> Double { DetectorMath.angDiff(a, b) }
 
     private func tick(dt: Double) {
         // Heading: the real device compass when available (point-to-scan), smoothed to
@@ -259,9 +252,7 @@ final class DetectorEngine {
 
     /// Shortest-angle lerp toward a target heading (handles the 359°→0° wrap).
     private func smoothHeading(_ current: Double, toward target: Double, factor: Double) -> Double {
-        var delta = (target - current).truncatingRemainder(dividingBy: 360)
-        if delta > 180 { delta -= 360 } else if delta < -180 { delta += 360 }
-        return (current + delta * factor + 360).truncatingRemainder(dividingBy: 360)
+        DetectorMath.smoothHeading(current, toward: target, factor: factor)
     }
 
     func toggleAudio() { audioOn.toggle() }
