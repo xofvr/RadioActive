@@ -46,7 +46,7 @@ struct DetectorScreen: View {
     private var gaugePanel: some View {
         VStack(spacing: 14) {
             HStack {
-                Text("▮ RAD DETECTOR")
+                Text(engine.deviceHeading != nil ? "◎ POINT TO SCAN" : "▮ RAD DETECTOR")
                     .font(Theme.mono(15))
                     .foregroundStyle(Theme.phosphor.opacity(0.7))
                 Spacer()

@@ -9,6 +9,7 @@ struct RootView: View {
     @State private var audio = GeigerAudio()
     @State private var haptics = Haptics()
     @State private var location = LocationService()
+    @State private var heading = HeadingService()
     @State private var placesProvider = PlacesProvider()
     @State private var tab: AppTab
     @State private var detectorPath: [Place] = []
@@ -73,15 +74,23 @@ struct RootView: View {
                 audio.setEnabled(on)
                 haptics.setEnabled(on)
             }
+            engine.onLock = { haptics.click(1.0) }
             engine.start()
             location.start()
+            heading.start()
         }
         .task { refresh(force: true) }
-        // Clock 2: as the user walks, rediscover only when the gate opens.
-        .onChange(of: location.updates) { refresh() }
+        // Compass: point the phone and the detector aims itself.
+        .onChange(of: heading.heading) { engine.deviceHeading = heading.heading }
+        // Clock 1: drift the radar/needle as you move. Clock 2: gated rediscovery.
+        .onChange(of: location.updates) {
+            engine.updateUser(location.coordinate)
+            refresh()
+        }
         .onDisappear {
             engine.stop()
             location.stop()
+            heading.stop()
         }
     }
 

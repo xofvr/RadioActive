@@ -35,6 +35,13 @@ final class DetectorEngine {
     // MARK: Event sinks (wired by the root to audio + haptics)
     @ObservationIgnored var onClick: ((Double) -> Void)?
     @ObservationIgnored var onAudioToggle: ((Bool) -> Void)?
+    /// Fires once when the detector locks onto a target — a "you found it" cue.
+    @ObservationIgnored var onLock: (() -> Void)?
+
+    /// Live device heading (degrees) when a compass is available — point the phone at a
+    /// place and the detector aims itself. `nil` ⇒ no compass (Simulator) ⇒ demo sweep.
+    @ObservationIgnored var deviceHeading: Double? = nil
+    @ObservationIgnored private var wasLocked = false
 
     // MARK: Internals
     @ObservationIgnored private var spike = 0.0
@@ -45,6 +52,8 @@ final class DetectorEngine {
     /// Centre of the current scan, and the tight radius the main pages work within.
     private(set) var center = LocationService.defaultCoordinate
     private(set) var localRadius: Double = LocationService.localRadius
+    /// The live, smoothed user position the radar/needle drift around between rediscoveries.
+    private(set) var userCoordinate = LocationService.defaultCoordinate
 
     // MARK: Derived
     var target: Place { places[min(targetIndex, places.count - 1)] }
@@ -146,12 +155,23 @@ final class DetectorEngine {
     }
 
     private func tick(dt: Double) {
-        let tgt = target
-        if autoScan && !dragging {
+        // Heading: the real device compass when available (point-to-scan), smoothed to
+        // avoid jitter; else the demo sweep so the Simulator still animates.
+        if let dh = deviceHeading {
+            heading = smoothHeading(heading, toward: dh, factor: 0.25)
+            aimByHeading()
+        } else if autoScan && !dragging {
             heading = (heading + dt * 11).truncatingRemainder(dividingBy: 360)
         }
+
+        let tgt = target
         let intensity = intensity(for: tgt, heading: heading)
         rads += (intensity - rads) * min(1, dt * 5)
+
+        // Lock-acquired edge → one-shot "you found it" cue.
+        let nowLocked = locked
+        if nowLocked && !wasLocked { onLock?() }
+        wasLocked = nowLocked
 
         // Geiger clicks — Poisson-ish, rate climbs with the reading.
         let rate = 0.6 + rads * 24
@@ -210,6 +230,40 @@ final class DetectorEngine {
         targetIndex = worst.flatMap { w in places.firstIndex(where: { $0.id == w.id }) } ?? 0
         loggedIDs.removeAll()
     }
+
+    /// Clock 1: recompute each located place's distance + bearing from the live, smoothed
+    /// coordinate so the radar and needle drift as you walk — entirely on-device.
+    func updateUser(_ coord: CLLocationCoordinate2D) {
+        userCoordinate = coord
+        let here = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        for i in places.indices {
+            guard let lat = places[i].lat, let lon = places[i].lon else { continue }
+            let there = CLLocation(latitude: lat, longitude: lon)
+            places[i].dist = Int(here.distance(from: there).rounded())
+            places[i].bearing = Place.bearing(from: coord, to: there.coordinate)
+        }
+    }
+
+    /// Compass mode: snap the active target to the local place you're pointing at, with
+    /// hysteresis so the needle doesn't flicker between two adjacent venues.
+    private func aimByHeading() {
+        let candidates = localPlaces
+        guard let best = candidates.min(by: { angDiff(heading, $0.bearing) < angDiff(heading, $1.bearing) }) else { return }
+        let current = target
+        if best.id != current.id,
+           angDiff(heading, best.bearing) + 12 < angDiff(heading, current.bearing),
+           let i = places.firstIndex(where: { $0.id == best.id }) {
+            targetIndex = i
+        }
+    }
+
+    /// Shortest-angle lerp toward a target heading (handles the 359°→0° wrap).
+    private func smoothHeading(_ current: Double, toward target: Double, factor: Double) -> Double {
+        var delta = (target - current).truncatingRemainder(dividingBy: 360)
+        if delta > 180 { delta -= 360 } else if delta < -180 { delta += 360 }
+        return (current + delta * factor + 360).truncatingRemainder(dividingBy: 360)
+    }
+
     func toggleAudio() { audioOn.toggle() }
 
     func toggleLog(_ place: Place) {

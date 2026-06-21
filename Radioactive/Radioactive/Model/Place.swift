@@ -9,8 +9,8 @@ struct Place: Identifiable, Hashable {
     let cat: PlaceCategory
     let rating: Double
     let reviews: Int
-    let dist: Int          // metres from "you"
-    let bearing: Double     // degrees, 0 = North
+    var dist: Int          // metres from "you" — recomputed live as you move
+    var bearing: Double     // degrees, 0 = North — recomputed live as you move
     let quotes: [Quote]
 
     /// Real coordinate when sourced from MapKit/TripAdvisor; nil for demo places,
