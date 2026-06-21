@@ -20,7 +20,7 @@ with modern Apple materials.
 | | |
 |---|---|
 | **Detector** | The hero instrument — a semicircular analog dose meter with a jittering needle, a live oscilloscope trace, CPM readout, contamination status, and a Geiger-audio toggle. Cycle targets and tap through to a full report. |
-| **Map** | A tactical **radar scope** — rotating sweep, range rings, a pulsing "you", and a pin for every contaminant placed by real bearing + distance. |
+| **Map** | Toggle between a tactical **radar scope** (rotating sweep, range rings, pulsing "you") and a real **Apple Map** (MapKit) — both plot every contaminant by real coordinate. Tap a pin for its report. |
 | **Nearby** | The leaderboard of the worst, sorted toxic-first, filterable by Pubs / Cafés / Eats, each with a red-star badge and a "badness" meter. |
 | **Detail** | The dossier — peak CPM, rating breakdown, and genuine field reports ("The *fish* filed a missing persons report."). |
 
@@ -62,15 +62,36 @@ open Radioactive.xcodeproj
 Then run on any iOS 26 simulator or device. Enable **Geiger audio** on the Detector screen
 and aim — the crackle (and, on device, the haptics) get hotter as the reviews get worse.
 
+## Live data — TripAdvisor (optional)
+
+Out of the box the app runs on a bundled **demo roster** of seven (gloriously fictional)
+establishments. Add a **TripAdvisor Content API** key and it instead scans for the worst
+**real** places near you — pulling live ratings + reviews and plotting them on the map.
+
+1. Get a free key at [tripadvisor.com/developers](https://www.tripadvisor.com/developers) and
+   allow-list your Referer/IP in their portal (then set `TripAdvisorConfig.referer` to match).
+2. Provide the key one of three ways:
+   - paste it into `hardcodedKey` in `Services/TripAdvisorService.swift` (quick local testing), or
+   - add a `TRIPADVISOR_API_KEY` string to the app's Info.plist, or
+   - set `TRIPADVISOR_API_KEY` as an environment variable on the Run scheme.
+3. Run and allow location. The Map header shows **LIVE · TRIPADVISOR** when it's pulling real
+   data, **DEMO ROSTER** otherwise.
+
+`LocationService` (CoreLocation) supplies your position — denied or unavailable, it falls back
+to a default centre, so the app is always fully functional. Without a key, nothing changes.
+
 ## Architecture
 
 ```
 Radioactive/Radioactive/
 ├── Theme/         Palette, danger-gradient, VT323 registration, Liquid Glass helpers
-├── Model/         Place data + DetectorEngine (the physics, CADisplayLink clock)
+├── Model/         Place data + DetectorEngine (the physics, CADisplayLink clock) + geo projection
 ├── Instruments/   Canvas: GaugeView, ScopeView, RadarView
 ├── Components/    RedStars, StatusPill, CRTOverlay
 ├── Screens/       RootView (glass TabView) + Detector / Map / Nearby / Detail
+├── Map/           LiveMapView (MapKit)
+├── Location/      LocationService (CoreLocation)
+├── Services/      TripAdvisorService (Content API) + PlacesProvider
 └── Audio/         GeigerAudio (AVAudioEngine), Haptics (CoreHaptics)
 ```
 
@@ -79,6 +100,7 @@ it's in the target.
 
 ---
 
-*All establishments are fictional. Any resemblance to your local chippy is, regrettably, plausible.*
+*Demo establishments are fictional; with TripAdvisor enabled the verdicts are entirely real.
+Any resemblance to your local chippy is, regrettably, plausible.*
 
 VT323 © The VT323 Project Authors, [SIL Open Font License](https://openfontlicense.org).

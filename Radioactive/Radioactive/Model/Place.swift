@@ -13,6 +13,11 @@ struct Place: Identifiable, Hashable {
     let bearing: Double     // degrees, 0 = North
     let quotes: [Quote]
 
+    /// Real coordinate when sourced from TripAdvisor; nil for demo places, which
+    /// get projected onto the map from `bearing` + `dist`.
+    var lat: Double? = nil
+    var lon: Double? = nil
+
     // MARK: Derived readouts
 
     /// Red stars — the inverse of a normal rating. 5 = maximally toxic.

@@ -40,13 +40,15 @@ final class DetectorEngine {
     @ObservationIgnored private var link: CADisplayLink?
     @ObservationIgnored private var lastTime: CFTimeInterval = 0
 
-    let places = Places.all
+    private(set) var places = Places.all
 
     // MARK: Derived
     var target: Place { places[targetIndex] }
     var dangerScale: DangerScale { .forPalette(palette) }
     var locked: Bool { angDiff(heading, target.bearing) < 26 }
-    var mapCount: Int { places.filter { $0.rating < 3 }.count }
+    /// Sub-3★ places — what the radar and map plot, and what the range chip counts.
+    var contaminants: [Place] { places.filter { $0.rating < 3 } }
+    var mapCount: Int { contaminants.count }
 
     enum Status {
         case contaminated, elevated, trace
@@ -164,6 +166,15 @@ final class DetectorEngine {
         // Resolve by identity, not by assuming a Place's id equals its array index.
         if let i = places.firstIndex(where: { $0.id == place.id }) { targetIndex = i }
     }
+
+    /// Swap in a new roster (e.g. live TripAdvisor results) while keeping the
+    /// active target index valid.
+    func setPlaces(_ newPlaces: [Place]) {
+        guard !newPlaces.isEmpty else { return }
+        places = newPlaces
+        targetIndex = min(targetIndex, places.count - 1)
+        loggedIDs.removeAll()
+    }
     func toggleAudio() { audioOn.toggle() }
 
     func toggleLog(_ place: Place) {
@@ -179,9 +190,7 @@ final class DetectorEngine {
     }
 
     func radarPins() -> [RadarPin] {
-        // Only sub-3★ places are "contaminants" — keeps the pin count in step
-        // with `mapCount`, which the range chip displays.
-        places.filter { $0.rating < 3 }.map { p in
+        contaminants.map { p in
             let rFrac = 0.10 + min(1, Double(p.dist) / 560) * 0.38
             let rad = p.bearing * .pi / 180
             return RadarPin(place: p,

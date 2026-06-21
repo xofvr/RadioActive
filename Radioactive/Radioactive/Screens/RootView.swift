@@ -8,6 +8,8 @@ struct RootView: View {
     @State private var engine = DetectorEngine()
     @State private var audio = GeigerAudio()
     @State private var haptics = Haptics()
+    @State private var location = LocationService()
+    @State private var placesProvider = PlacesProvider()
     @State private var tab: AppTab
     @State private var detectorPath: [Place] = []
     @State private var mapPath: [Place] = []
@@ -43,7 +45,10 @@ struct RootView: View {
             }
             Tab("Map", systemImage: "scope", value: AppTab.map) {
                 NavigationStack(path: $mapPath) {
-                    MapScreen(engine: engine, onScan: { tab = .detector })
+                    MapScreen(engine: engine,
+                              onScan: { tab = .detector },
+                              locationService: location,
+                              placesProvider: placesProvider)
                         .detailRoute(engine: engine, onDetect: detect)
                 }
             }
@@ -68,6 +73,15 @@ struct RootView: View {
                 haptics.setEnabled(on)
             }
             engine.start()
+            location.requestIfNeeded()
+        }
+        .task {
+            // Pull the worst live TripAdvisor places if a key is configured;
+            // otherwise the engine keeps its demo roster. Re-runs on a new fix.
+            await placesProvider.load(into: engine, near: location.coordinate)
+        }
+        .onChange(of: location.coordinate.latitude) {
+            Task { await placesProvider.load(into: engine, near: location.coordinate) }
         }
         .onDisappear { engine.stop() }
     }
