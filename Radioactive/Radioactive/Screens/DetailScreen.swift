@@ -9,18 +9,31 @@ struct DetailScreen: View {
     var engine: DetectorEngine
     var onDetect: () -> Void
 
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingCard = false
+
     /// Hazard colour for this place's badness, on the active palette.
     private var hazard: Color { engine.color(place.badness) }
+    /// Real review data exists ONLY for the demo roster; every MapKit-discovered business
+    /// is a simulated stand-in, so it must never show a fabricated histogram or quotes.
+    private var hasRealReviews: Bool { place.ratingSource == .real && !place.quotes.isEmpty }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                if place.ratingSource == .simulated { simBadge }
                 verdict
                 statsRow
-                ratingBreakdown
-                fieldReports
+                if hasRealReviews {
+                    ratingBreakdown
+                    fieldReports
+                } else {
+                    simulatedPanel
+                }
                 actionsRow
+                reportButton
             }
             .padding(18)
         }
@@ -31,6 +44,12 @@ struct DetailScreen: View {
         // Reclaim the bottom for the primary actions — the tab bar would
         // otherwise sit over "DETECT FROM HERE".
         .toolbar(.hidden, for: .tabBar)
+        .sheet(isPresented: $showingCard) {
+            if let id = place.mapItemID {
+                PlaceCardView(mapItemID: id) { showingCard = false }
+                    .ignoresSafeArea()
+            }
+        }
     }
 
     // MARK: 1 — Header
@@ -84,15 +103,98 @@ struct DetailScreen: View {
                      value: "\(place.peakCPM)",
                      valueColor: Theme.danger,
                      tint: Theme.danger)
-            statCard(label: "REVIEWS",
-                     value: "\(place.reviews)",
-                     valueColor: Theme.phosphorBright,
-                     tint: Theme.phosphor)
-            statCard(label: "DAYS SINCE 5★",
-                     value: "\(place.daysSinceGood)",
-                     valueColor: Theme.phosphorBright,
-                     tint: Theme.phosphor)
+            if hasRealReviews {
+                statCard(label: "REVIEWS",
+                         value: "\(place.reviews)",
+                         valueColor: Theme.phosphorBright,
+                         tint: Theme.phosphor)
+                statCard(label: "DAYS SINCE 5★",
+                         value: "\(place.daysSinceGood)",
+                         valueColor: Theme.phosphorBright,
+                         tint: Theme.phosphor)
+            } else {
+                // Real business, simulated reading — show real geometry, not invented stats.
+                statCard(label: "DISTANCE",
+                         value: place.distLabel,
+                         valueColor: Theme.phosphorBright,
+                         tint: Theme.phosphor)
+                statCard(label: "BEARING",
+                         value: place.bearingLabel,
+                         valueColor: Theme.phosphorBright,
+                         tint: Theme.phosphor)
+            }
         }
+    }
+
+    /// "These stars are made up." Amber stand-in flag for a real business with no rating feed.
+    private var simBadge: some View {
+        Text("SIMULATED · NOT A REAL RATING")
+            .font(Theme.mono(12))
+            .tracking(0.5)
+            .foregroundStyle(Theme.amber)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Theme.amber.opacity(0.12)))
+            .overlay(Capsule().stroke(Theme.amber.opacity(0.40), lineWidth: 1))
+            .accessibilityLabel("Simulated reading, not a real rating")
+    }
+
+    /// Replaces the fabricated histogram + quotes for real businesses: states plainly
+    /// there is no real rating feed, and offers the genuine Apple Maps card as the
+    /// reality-check.
+    private var simulatedPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("▮ READING SOURCE")
+            Text("No real rating feed for this place yet. The red stars are a deterministic novelty stand-in — not a measured rating, a review, or a food-safety assessment of \(place.name).")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            if place.mapItemID != nil {
+                Button { showingCard = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "map.fill")
+                        Text("VIEW REAL INFO IN APPLE MAPS")
+                    }
+                    .font(Theme.mono(16))
+                    .foregroundStyle(Theme.phosphorBright)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 12),
+                                 tint: Theme.phosphor.opacity(0.18), interactive: true)
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .stroke(Theme.phosphor.opacity(0.40), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .instrumentPanel()
+    }
+
+    /// Report / request-removal (App Review Guideline 1.2). Suppresses the place locally
+    /// so it stops appearing, and opens a prefilled mail to the developer.
+    private var reportButton: some View {
+        Button {
+            engine.suppress(place)
+            let subject = "RADIOACTIVE — report/remove: \(place.name)"
+            let body = "Place: \(place.name)\nID: \(place.mapItemID ?? "n/a")\n\nReason: "
+            var comps = URLComponents(string: "mailto:reports@radioactive.app")
+            comps?.queryItems = [.init(name: "subject", value: subject), .init(name: "body", value: body)]
+            if let url = comps?.url { openURL(url) }
+            dismiss()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "flag")
+                Text("Report / request removal")
+            }
+            .font(Theme.mono(14))
+            .foregroundStyle(Theme.inkMuted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Report or request removal of this place")
     }
 
     private func statCard(label: String, value: String, valueColor: Color, tint: Color) -> some View {

@@ -6,6 +6,7 @@ import SwiftUI
 /// Liquid-Glass audio toggle that brings the crackle to life.
 struct DetectorScreen: View {
     var engine: DetectorEngine
+    var onAbout: () -> Void = {}
 
     var body: some View {
         ScrollView {
@@ -37,6 +38,13 @@ struct DetectorScreen: View {
                     .phosphorGlow(Theme.phosphor, radius: 8)
             }
             Spacer(minLength: 8)
+            Button(action: onAbout) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.phosphor.opacity(0.7))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("About RADIOACTIVE")
             StatusPill(engine: engine)
         }
     }

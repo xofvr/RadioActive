@@ -33,6 +33,11 @@ struct Place: Identifiable, Hashable {
     /// 0...1 "badness", the quantity that actually drives every reading.
     var badness: Double { (5 - rating) / 5 }
 
+    /// Stable identity for bookmarking + suppression across rescans. `id` is reassigned
+    /// 0…n on every fetch, so it must NOT be used as identity; `mapItemID` (Apple) and
+    /// demo names are stable.
+    var logKey: String { mapItemID ?? "demo:\(name)" }
+
     var distLabel: String { "\(dist) m" }
     var ratingLabel: String { String(format: "%.1f", rating) }
 

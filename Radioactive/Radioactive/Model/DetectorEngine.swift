@@ -30,7 +30,12 @@ final class DetectorEngine {
     // MARK: Selection / interaction
     var targetIndex = 0
     var dragging = false
-    var loggedIDs = Set<Int>()
+    /// Bookmarked places, keyed by stable `logKey` (persisted) so a bookmark survives
+    /// rescans and never silently points at a different business.
+    var loggedKeys = Set<String>(UserDefaults.standard.stringArray(forKey: "loggedKeys") ?? [])
+    /// Places the user reported / asked to remove — filtered out of future discovery.
+    var suppressedKeys = Set<String>(UserDefaults.standard.stringArray(forKey: "suppressedKeys") ?? [])
+    @ObservationIgnored private var isLiveRoster = false
 
     // MARK: Event sinks (wired by the root to audio + haptics)
     @ObservationIgnored var onClick: ((Double) -> Void)?
@@ -214,14 +219,24 @@ final class DetectorEngine {
 
     /// Swap in a freshly discovered roster (MapKit/provider results) and re-centre the
     /// scan. Aims at the worst LOCAL place so the hero opens hot.
-    func setPlaces(_ newPlaces: [Place], center: CLLocationCoordinate2D, localRadius: Double) {
+    func setPlaces(_ newPlaces: [Place], center: CLLocationCoordinate2D, localRadius: Double, force: Bool) {
         guard !newPlaces.isEmpty else { return }
+        let previousKey = target.logKey          // `places` is always non-empty (demo init)
+        let firstLoad = !isLiveRoster
         places = newPlaces
+        isLiveRoster = true
         self.center = center
         self.localRadius = localRadius
-        let worst = localPlaces.first ?? places.min(by: { $0.rating < $1.rating })
-        targetIndex = worst.flatMap { w in places.firstIndex(where: { $0.id == w.id }) } ?? 0
-        loggedIDs.removeAll()
+
+        // Carry the aimed target forward by identity across an auto-rediscovery, so a
+        // walk never snaps the cone you carefully aimed. Re-home to worst-local only on
+        // the first real load or an explicit RESCAN (force). Bookmarks are NEVER cleared.
+        if !force, !firstLoad, let i = places.firstIndex(where: { $0.logKey == previousKey }) {
+            targetIndex = i
+        } else {
+            let worst = localPlaces.first ?? places.min(by: { $0.rating < $1.rating })
+            targetIndex = worst.flatMap { w in places.firstIndex(where: { $0.id == w.id }) } ?? 0
+        }
     }
 
     /// Clock 1: recompute each located place's distance + bearing from the live, smoothed
@@ -258,10 +273,17 @@ final class DetectorEngine {
     func toggleAudio() { audioOn.toggle() }
 
     func toggleLog(_ place: Place) {
-        if loggedIDs.contains(place.id) { loggedIDs.remove(place.id) }
-        else { loggedIDs.insert(place.id) }
+        let key = place.logKey
+        if loggedKeys.contains(key) { loggedKeys.remove(key) } else { loggedKeys.insert(key) }
+        UserDefaults.standard.set(Array(loggedKeys), forKey: "loggedKeys")
     }
-    func isLogged(_ place: Place) -> Bool { loggedIDs.contains(place.id) }
+    func isLogged(_ place: Place) -> Bool { loggedKeys.contains(place.logKey) }
+
+    func suppress(_ place: Place) {
+        suppressedKeys.insert(place.logKey)
+        UserDefaults.standard.set(Array(suppressedKeys), forKey: "suppressedKeys")
+    }
+    func isSuppressed(_ place: Place) -> Bool { suppressedKeys.contains(place.logKey) }
 
     // MARK: Derived collections for the screens
 

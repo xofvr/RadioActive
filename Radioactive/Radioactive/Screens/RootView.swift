@@ -15,6 +15,8 @@ struct RootView: View {
     @State private var detectorPath: [Place] = []
     @State private var mapPath: [Place] = []
     @State private var nearbyPath: [Place]
+    @State private var showAbout: Bool
+    @State private var aboutIsFirstRun: Bool
 
     enum AppTab: Hashable { case detector, map, nearby }
 
@@ -34,13 +36,21 @@ struct RootView: View {
         #endif
         _tab = State(initialValue: initialTab)
         _nearbyPath = State(initialValue: nearby)
+
+        var seenAbout = UserDefaults.standard.bool(forKey: "didShowAbout")
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "RAD_SKIP_ABOUT") { seenAbout = true }
+        #endif
+        _showAbout = State(initialValue: !seenAbout)
+        _aboutIsFirstRun = State(initialValue: !seenAbout)
     }
 
     var body: some View {
         TabView(selection: $tab) {
             Tab("Detector", systemImage: "gauge.with.dots.needle.bottom.50percent", value: AppTab.detector) {
                 NavigationStack(path: $detectorPath) {
-                    DetectorScreen(engine: engine)
+                    DetectorScreen(engine: engine,
+                                   onAbout: { aboutIsFirstRun = false; showAbout = true })
                         .detailRoute(engine: engine, onDetect: detect)
                 }
             }
@@ -76,10 +86,10 @@ struct RootView: View {
             }
             engine.onLock = { haptics.click(1.0) }
             engine.start()
-            location.start()
-            heading.start()
+            // Returning users start scanning straight away; first-run waits for the
+            // About sheet's BEGIN SCAN so the location prompt arrives with context.
+            if !showAbout { beginScanning() }
         }
-        .task { refresh(force: true) }
         // Compass: point the phone and the detector aims itself.
         .onChange(of: heading.heading) { engine.deviceHeading = heading.heading }
         // Clock 1: drift the radar/needle as you move. Clock 2: gated rediscovery.
@@ -92,6 +102,22 @@ struct RootView: View {
             location.stop()
             heading.stop()
         }
+        .sheet(isPresented: $showAbout) {
+            AboutSheet(isFirstRun: aboutIsFirstRun) {
+                if aboutIsFirstRun { beginScanning(); aboutIsFirstRun = false }
+                showAbout = false
+            }
+            // First run must be acknowledged — it's the disclaimer + permission primer.
+            .interactiveDismissDisabled(aboutIsFirstRun)
+        }
+    }
+
+    /// Start location + compass (priming the permission prompt) and run the first scan.
+    private func beginScanning() {
+        UserDefaults.standard.set(true, forKey: "didShowAbout")
+        location.start()
+        heading.start()
+        refresh(force: true)
     }
 
     /// Run a rediscovery if the movement gate allows (or `force` for a manual RESCAN /
@@ -99,7 +125,7 @@ struct RootView: View {
     private func refresh(force: Bool = false) {
         guard location.shouldRefetch(force: force) else { return }
         location.markFetched()
-        Task { await placesProvider.load(into: engine, near: location.coordinate) }
+        Task { await placesProvider.load(into: engine, near: location.coordinate, force: force) }
     }
 
     /// "Detect from here": aim the engine at a place and jump to the detector.

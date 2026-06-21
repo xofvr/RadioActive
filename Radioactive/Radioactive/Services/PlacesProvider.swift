@@ -26,9 +26,10 @@ final class PlacesProvider {
         }
     }
 
-    /// Discover real places near `coordinate` and load them into the engine. Safe to
-    /// call repeatedly; no-ops while a load is in flight.
-    func load(into engine: DetectorEngine, near coordinate: CLLocationCoordinate2D) async {
+    /// Discover real places near `coordinate` and load them into the engine. `force` is
+    /// a manual RESCAN (re-home the aim); otherwise the aimed target is preserved. Safe
+    /// to call repeatedly; no-ops while a load is in flight.
+    func load(into engine: DetectorEngine, near coordinate: CLLocationCoordinate2D, force: Bool) async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false; didAttempt = true }
@@ -38,7 +39,11 @@ final class PlacesProvider {
         let discovered = await MapDiscovery().discover(near: coordinate,
                                                        radius: LocationService.cityRadius,
                                                        limit: 40)
-        guard !discovered.isEmpty else {
+        // Drop anything the user reported / asked to remove, then re-id sequentially.
+        let visible = discovered.filter { !engine.isSuppressed($0) }.enumerated().map { index, place -> Place in
+            var p = place; p.id = index; return p
+        }
+        guard !visible.isEmpty else {
             source = .demo   // offline / no POIs nearby — keep the bundled roster
             return
         }
@@ -47,8 +52,9 @@ final class PlacesProvider {
         // simulated readings here, matching by name + coordinate and bumping
         // `matchedCount`. Until then every reading is a deterministic simulation,
         // surfaced flagged so a stand-in is never passed off as a real verdict.
-        matchedCount = discovered.filter { $0.ratingSource == .real }.count
-        engine.setPlaces(discovered, center: coordinate, localRadius: LocationService.localRadius)
+        matchedCount = visible.filter { $0.ratingSource == .real }.count
+        engine.setPlaces(visible, center: coordinate,
+                         localRadius: LocationService.localRadius, force: force)
         source = .mapKit
     }
 }
