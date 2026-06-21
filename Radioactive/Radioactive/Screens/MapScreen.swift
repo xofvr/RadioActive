@@ -7,6 +7,7 @@ import SwiftUI
 struct MapScreen: View {
     var engine: DetectorEngine
     var onScan: () -> Void
+    var onRescan: () -> Void
     var locationService: LocationService
     var placesProvider: PlacesProvider
 
@@ -55,6 +56,7 @@ struct MapScreen: View {
                     .font(Theme.mono(11))
                     .tracking(1)
                     .foregroundStyle(Theme.phosphor.opacity(0.4))
+                rescanButton
                 Spacer()
             }
             .padding(.top, 8)
@@ -96,6 +98,28 @@ struct MapScreen: View {
         .accessibilityLabel("Map view mode")
     }
 
+    // MARK: Rescan
+
+    /// Manual "search this area" — the Maps/Yelp idiom. Honours the time floor in the
+    /// location service, so a real paid rediscovery can never be spammed.
+    private var rescanButton: some View {
+        Button(action: onRescan) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.clockwise")
+                Text("RESCAN THIS AREA")
+            }
+            .font(Theme.mono(13))
+            .tracking(0.5)
+            .foregroundStyle(Theme.phosphor)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .liquidGlass(in: Capsule(), tint: Theme.phosphor.opacity(0.14), interactive: true)
+            .overlay(Capsule().stroke(Theme.phosphor.opacity(0.30), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Rescan this area")
+    }
+
     // MARK: Range chip
 
     private var rangeChip: some View {
@@ -105,7 +129,7 @@ struct MapScreen: View {
                 .frame(width: 8, height: 8)
                 .phosphorGlow(Theme.phosphor, radius: 6)
 
-            Text("\(engine.mapCount) CONTAMINANTS IN RANGE")
+            Text("\(engine.mapCount) HOT SIGNALS IN RANGE")
                 .font(Theme.mono(16))
                 .foregroundStyle(Theme.phosphorBright)
                 .tracking(0.5)

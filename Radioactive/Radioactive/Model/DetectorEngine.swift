@@ -1,3 +1,4 @@
+import CoreLocation
 import Observation
 import QuartzCore
 import SwiftUI
@@ -41,35 +42,61 @@ final class DetectorEngine {
     @ObservationIgnored private var lastTime: CFTimeInterval = 0
 
     private(set) var places = Places.all
+    /// Centre of the current scan, and the tight radius the main pages work within.
+    private(set) var center = LocationService.defaultCoordinate
+    private(set) var localRadius: Double = LocationService.localRadius
 
     // MARK: Derived
-    var target: Place { places[targetIndex] }
+    var target: Place { places[min(targetIndex, places.count - 1)] }
     var dangerScale: DangerScale { .forPalette(palette) }
     var locked: Bool { angDiff(heading, target.bearing) < 26 }
-    /// Sub-3★ places — what the radar and map plot, and what the range chip counts.
-    var contaminants: [Place] { places.filter { $0.rating < 3 } }
+
+    /// The tight "radius around you" set — what the Detector and Radar work within,
+    /// worst-first. The Nearby/explore page uses the full `places` (city) set instead.
+    var localPlaces: [Place] {
+        places.filter { Double($0.dist) <= localRadius }.sorted { $0.rating < $1.rating }
+    }
+
+    /// A RELATIVE contamination bar: the local median badness (floored), so the radar
+    /// and map are never empty when real ratings cluster high — the hero surfaces the
+    /// WORST nearby, not an absolute "< 3★" toxicity (which real UK data rarely hits).
+    var contaminationFloor: Double {
+        let bs = localPlaces.map(\.badness).sorted()
+        guard !bs.isEmpty else { return 0.4 }
+        return max(0.35, min(0.6, bs[bs.count / 2]))
+    }
+
+    /// The worst local places — what the radar and map plot, and what the range chip
+    /// counts. Always non-empty when anything is nearby (shows the worst few as a floor).
+    var contaminants: [Place] {
+        let floor = contaminationFloor
+        let hot = localPlaces.filter { $0.badness >= floor }
+        return hot.isEmpty ? Array(localPlaces.prefix(6)) : Array(hot.prefix(10))
+    }
     var mapCount: Int { contaminants.count }
 
+    // Labels describe the SCAN READING, never the business — no "contaminated" claim
+    // is made about any real place (a public-ship + defamation requirement).
     enum Status {
-        case contaminated, elevated, trace
+        case hot, elevated, faint
         var label: String {
             switch self {
-            case .contaminated: "CONTAMINATED"
+            case .hot: "HOT SIGNAL"
             case .elevated: "ELEVATED"
-            case .trace: "TRACE LEVELS"
+            case .faint: "FAINT TRACE"
             }
         }
     }
 
     var status: Status {
-        rads > 0.6 ? .contaminated : (rads > 0.33 ? .elevated : .trace)
+        rads > 0.6 ? .hot : (rads > 0.33 ? .elevated : .faint)
     }
 
     var statusColor: Color {
         switch status {
-        case .contaminated: Theme.dangerSoft
+        case .hot: Theme.dangerSoft
         case .elevated: Theme.amber
-        case .trace: Theme.phosphorBright
+        case .faint: Theme.phosphorBright
         }
     }
 
@@ -154,12 +181,17 @@ final class DetectorEngine {
 
     // MARK: Commands
 
-    /// Cycle the active target in worst-first order.
+    /// Cycle the active target through the LOCAL places, worst-first.
     func cycleTarget() {
-        let order = places.indices.sorted { places[$0].rating < places[$1].rating }
-        if let pos = order.firstIndex(of: targetIndex) {
-            targetIndex = order[(pos + 1) % order.count]
+        let order = localPlaces.map(\.id)
+        guard !order.isEmpty else { return }
+        let nextID: Int
+        if let pos = order.firstIndex(of: target.id) {
+            nextID = order[(pos + 1) % order.count]
+        } else {
+            nextID = order[0]
         }
+        if let i = places.firstIndex(where: { $0.id == nextID }) { targetIndex = i }
     }
 
     func aim(at place: Place) {
@@ -167,12 +199,15 @@ final class DetectorEngine {
         if let i = places.firstIndex(where: { $0.id == place.id }) { targetIndex = i }
     }
 
-    /// Swap in a new roster (e.g. live TripAdvisor results) while keeping the
-    /// active target index valid.
-    func setPlaces(_ newPlaces: [Place]) {
+    /// Swap in a freshly discovered roster (MapKit/provider results) and re-centre the
+    /// scan. Aims at the worst LOCAL place so the hero opens hot.
+    func setPlaces(_ newPlaces: [Place], center: CLLocationCoordinate2D, localRadius: Double) {
         guard !newPlaces.isEmpty else { return }
         places = newPlaces
-        targetIndex = min(targetIndex, places.count - 1)
+        self.center = center
+        self.localRadius = localRadius
+        let worst = localPlaces.first ?? places.min(by: { $0.rating < $1.rating })
+        targetIndex = worst.flatMap { w in places.firstIndex(where: { $0.id == w.id }) } ?? 0
         loggedIDs.removeAll()
     }
     func toggleAudio() { audioOn.toggle() }

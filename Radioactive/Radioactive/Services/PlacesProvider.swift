@@ -1,40 +1,54 @@
 import CoreLocation
 import Observation
 
-/// Decides where the roster comes from. With a TripAdvisor key configured it
-/// pulls the worst real places near you; otherwise it leaves the engine on its
-/// bundled demo roster. Either way the app is fully functional.
+/// Decides where the roster comes from. It always tries REAL nearby businesses via
+/// MapKit first (keyless, proximity-bounded); their red-star readings are deterministic
+/// simulations — clearly flagged — until a real `RatingProvider` (e.g. Google Places)
+/// is wired in behind the same seam. Falls back to the bundled demo roster when offline
+/// or when nothing is nearby, so the app is always fully functional.
 @MainActor
 @Observable
 final class PlacesProvider {
-    enum Source: String { case demo = "Demo data", tripAdvisor = "TripAdvisor" }
+    enum Source: String { case demo, mapKit, tripAdvisor }
 
     private(set) var source: Source = .demo
     private(set) var isLoading = false
     private(set) var didAttempt = false
+    /// How many loaded places carry a REAL rating (vs a simulated stand-in).
+    private(set) var matchedCount = 0
 
     var statusLabel: String {
-        if isLoading { return "LINKING TRIPADVISOR…" }
-        return source == .tripAdvisor ? "LIVE · TRIPADVISOR" : "DEMO ROSTER"
+        if isLoading { return "SCANNING…" }
+        switch source {
+        case .tripAdvisor: return "LIVE · TRIPADVISOR"
+        case .mapKit:      return "LIVE PLACES · SIM READING"
+        case .demo:        return "DEMO ROSTER"
+        }
     }
 
-    /// Load real places into the engine if possible. Safe to call repeatedly;
-    /// no-ops while a load is in flight.
+    /// Discover real places near `coordinate` and load them into the engine. Safe to
+    /// call repeatedly; no-ops while a load is in flight.
     func load(into engine: DetectorEngine, near coordinate: CLLocationCoordinate2D) async {
         guard !isLoading else { return }
-        guard TripAdvisorConfig.isConfigured else {
-            source = .demo
-            didAttempt = true
-            return
-        }
         isLoading = true
         defer { isLoading = false; didAttempt = true }
 
-        if let places = await TripAdvisorService().fetchWorstPlaces(near: coordinate), !places.isEmpty {
-            engine.setPlaces(places)
-            source = .tripAdvisor
-        } else {
-            source = .demo
+        // Real MapKit discovery across the city radius; the main pages narrow to the
+        // local radius themselves. No key, no billing.
+        let discovered = await MapDiscovery().discover(near: coordinate,
+                                                       radius: LocationService.cityRadius,
+                                                       limit: 40)
+        guard !discovered.isEmpty else {
+            source = .demo   // offline / no POIs nearby — keep the bundled roster
+            return
         }
+
+        // SEAM: a real RatingProvider (e.g. Google Places New) would replace the
+        // simulated readings here, matching by name + coordinate and bumping
+        // `matchedCount`. Until then every reading is a deterministic simulation,
+        // surfaced flagged so a stand-in is never passed off as a real verdict.
+        matchedCount = discovered.filter { $0.ratingSource == .real }.count
+        engine.setPlaces(discovered, center: coordinate, localRadius: LocationService.localRadius)
+        source = .mapKit
     }
 }

@@ -47,6 +47,7 @@ struct RootView: View {
                 NavigationStack(path: $mapPath) {
                     MapScreen(engine: engine,
                               onScan: { tab = .detector },
+                              onRescan: { refresh(force: true) },
                               locationService: location,
                               placesProvider: placesProvider)
                         .detailRoute(engine: engine, onDetect: detect)
@@ -73,17 +74,23 @@ struct RootView: View {
                 haptics.setEnabled(on)
             }
             engine.start()
-            location.requestIfNeeded()
+            location.start()
         }
-        .task {
-            // Pull the worst live TripAdvisor places if a key is configured;
-            // otherwise the engine keeps its demo roster. Re-runs on a new fix.
-            await placesProvider.load(into: engine, near: location.coordinate)
+        .task { refresh(force: true) }
+        // Clock 2: as the user walks, rediscover only when the gate opens.
+        .onChange(of: location.updates) { refresh() }
+        .onDisappear {
+            engine.stop()
+            location.stop()
         }
-        .onChange(of: location.coordinate.latitude) {
-            Task { await placesProvider.load(into: engine, near: location.coordinate) }
-        }
-        .onDisappear { engine.stop() }
+    }
+
+    /// Run a rediscovery if the movement gate allows (or `force` for a manual RESCAN /
+    /// the first load). Arms the gate before awaiting so one crossing never double-fires.
+    private func refresh(force: Bool = false) {
+        guard location.shouldRefetch(force: force) else { return }
+        location.markFetched()
+        Task { await placesProvider.load(into: engine, near: location.coordinate) }
     }
 
     /// "Detect from here": aim the engine at a place and jump to the detector.

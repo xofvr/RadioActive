@@ -2,7 +2,7 @@ import Foundation
 
 /// A place you can "scan". The worse its star rating, the more radioactive it reads.
 struct Place: Identifiable, Hashable {
-    let id: Int
+    var id: Int             // reassigned 0…n by the provider per scan (sort order)
     let name: String
     let short: String
     let type: String
@@ -13,10 +13,17 @@ struct Place: Identifiable, Hashable {
     let bearing: Double     // degrees, 0 = North
     let quotes: [Quote]
 
-    /// Real coordinate when sourced from TripAdvisor; nil for demo places, which
-    /// get projected onto the map from `bearing` + `dist`.
+    /// Real coordinate when sourced from MapKit/TripAdvisor; nil for demo places,
+    /// which get projected onto the map from `bearing` + `dist`.
     var lat: Double? = nil
     var lon: Double? = nil
+
+    /// Apple Maps' stable identifier when discovered via MapKit — lets us open the
+    /// real native place card (and dedupe across refetches). nil otherwise.
+    var mapItemID: String? = nil
+
+    /// Where this place's RATING came from. Drives the honesty affordance.
+    var ratingSource: RatingSource = .real
 
     // MARK: Derived readouts
 
@@ -45,10 +52,25 @@ struct Quote: Identifiable, Hashable {
     let author: String
 }
 
+/// Where a place's RATING came from — drives the honesty affordance in the UI.
+/// `.real` covers both owned demo fiction and provider-matched ratings; `.simulated`
+/// is a deterministic novelty stand-in for a real business we have no rating feed for,
+/// and is always shown flagged so a stand-in reading is never passed off as real.
+enum RatingSource: String { case real, simulated }
+
 enum PlaceCategory: String, CaseIterable {
     case eats = "Eats"
     case pubs = "Pubs"
     case cafes = "Cafés"
+
+    /// Singular noun, used as a place's type label when MapKit gives no finer one.
+    var singular: String {
+        switch self {
+        case .eats: "Restaurant"
+        case .pubs: "Pub"
+        case .cafes: "Café"
+        }
+    }
 }
 
 /// The Nearby-screen filter chips. `all` plus each category.

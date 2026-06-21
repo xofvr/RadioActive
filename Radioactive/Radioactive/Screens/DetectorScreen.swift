@@ -76,6 +76,12 @@ struct DetectorScreen: View {
             RedStars(red: engine.target.red, size: 32, spacing: 8)
                 .frame(maxWidth: .infinity)
 
+            // Honesty: when the rating is a deterministic stand-in (no real provider
+            // matched this real business yet), say so plainly under the stars.
+            if engine.target.ratingSource == .simulated {
+                simBadge
+            }
+
             // Live dose readout — clearly secondary, in its own row so the needle
             // can never cross it. Isolated subview so only it redraws each frame.
             CPMReadout(engine: engine)
@@ -85,6 +91,20 @@ struct DetectorScreen: View {
         }
         .padding(16)
         .instrumentPanel()
+    }
+
+    /// "These stars are made up." The amber stand-in flag shown under the hero when no
+    /// real rating provider has matched the active (real) place yet.
+    private var simBadge: some View {
+        Text("SIMULATED · NOT A REAL RATING")
+            .font(Theme.mono(12))
+            .tracking(0.5)
+            .foregroundStyle(Theme.amber)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Theme.amber.opacity(0.12)))
+            .overlay(Capsule().stroke(Theme.amber.opacity(0.40), lineWidth: 1))
+            .accessibilityLabel("Simulated reading, not a real rating")
     }
 
     // MARK: Aiming-at card
