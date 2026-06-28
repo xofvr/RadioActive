@@ -111,10 +111,13 @@ struct RadarView: View {
     }
 
     private func pinView(_ pin: RadarPin) -> some View {
-        let color = engine.color(pin.place.badness, 0.95)
+        // COLOUR is the RELATIVE reading (worst-nearby reads hot); the NUMBER stays the
+        // ABSOLUTE red-star count, so a great place is never re-coloured as toxic.
+        let color = engine.color(pin.readingBadness, 0.95)
+        let isTarget = pin.place.id == engine.target.id
         return VStack(spacing: 3) {
             ZStack {
-                PingRing(color: engine.color(pin.place.badness, 0.5))
+                PingRing(color: engine.color(pin.readingBadness, 0.5))
                 Circle()
                     .fill(color)
                     .frame(width: 26, height: 26)
@@ -125,14 +128,29 @@ struct RadarView: View {
                             .foregroundStyle(Theme.bgDeep)
                     )
                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+
+                // Cluster size — how many nearby contaminants collapsed into this pin.
+                if pin.count > 1 {
+                    Text("+\(pin.count - 1)")
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.black.opacity(0.7)))
+                        .overlay(Capsule().stroke(color.opacity(0.8), lineWidth: 1))
+                        .offset(x: 18, y: -16)
+                }
             }
-            Text(pin.place.short)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(Color.black.opacity(0.55)))
-                .fixedSize()
+            // Name capsule only for the active target — keeps the scope uncluttered.
+            if isTarget {
+                Text(pin.place.short)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .fixedSize()
+            }
         }
     }
 }

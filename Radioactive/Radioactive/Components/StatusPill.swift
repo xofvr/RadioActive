@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Live contamination readout pill — colour + label track the engine, with a
-/// blinking hazard dot. CONTAMINATED / ELEVATED / TRACE LEVELS.
+/// blinking hazard dot. HOT SIGNAL / ELEVATED / FAINT TRACE (deliberately
+/// non-defamatory — never a "CONTAMINATED" food-safety claim).
 struct StatusPill: View {
     var engine: DetectorEngine
     @State private var blink = false

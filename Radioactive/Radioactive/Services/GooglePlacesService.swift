@@ -1,6 +1,24 @@
 import CoreLocation
 import Foundation
 
+/// The honest result of a Google Places fetch. Replaces the old `[Place]?`.
+enum PlacesOutcome {
+    case success([Place])   // ≥1 rated place decoded
+    case empty              // HTTP 2xx, decoded, but zero usable rated places
+    case rateLimited        // HTTP 429 — quota; caller throttles → MapKit sim
+    case failed(Reason)     // any other non-recoverable outcome
+}
+
+/// Why a real-ratings fetch did not yield places. `Equatable` so PlacesProvider
+/// can branch its status label on `.network`.
+enum Reason: Equatable {
+    case unconfigured       // API key empty
+    case network            // URLError (offline / timeout)
+    case decode             // DecodingError
+    case http(Int)          // any other non-2xx status code
+    case billing            // 403 or a billing/permission body
+}
+
 /// Configuration for the Google Places API (New). Get a key at
 /// https://console.cloud.google.com → enable **Places API (New)** → create an API key,
 /// then restrict it (iOS bundle id + "Places API (New)"). Provide it one of three ways:
@@ -39,8 +57,9 @@ enum GooglePlacesConfig {
 /// as of 2026) — comfortably free for a single, throttled user. We deliberately do NOT
 /// request `places.reviews` (a costlier Enterprise+Atmosphere field); quotes stay empty.
 ///
-/// Returns `nil` (never throws to the caller) when unconfigured or on any failure, so the
-/// caller can fall back to MapKit discovery and then the demo roster.
+/// Returns a `PlacesOutcome` (never throws to the caller). On any unconfigured, empty,
+/// throttled, or failed outcome the caller falls back to MapKit discovery and then the
+/// demo roster, while recording the throttle / reason for an honest status label.
 struct GooglePlacesService {
     var key = GooglePlacesConfig.apiKey
     private let endpoint = URL(string: "https://places.googleapis.com/v1/places:searchNearby")!
@@ -67,8 +86,8 @@ struct GooglePlacesService {
     /// Discover up to 20 real, *rated* food/drink places within `radius` of `center`,
     /// worst-first by real rating. Unrated places are dropped — we never attach a reading
     /// to a real business we have no rating for.
-    func fetchPlaces(near center: CLLocationCoordinate2D, radius: CLLocationDistance, limit: Int = 20) async -> [Place]? {
-        guard !key.isEmpty else { return nil }
+    func fetchPlaces(near center: CLLocationCoordinate2D, radius: CLLocationDistance, limit: Int = 20) async -> PlacesOutcome {
+        guard !key.isEmpty else { return .failed(.unconfigured) }
 
         // Google caps a Nearby Search circle at 50 km; the app's radii are far smaller.
         let cappedRadius = min(max(radius, 1), 50_000)
@@ -90,22 +109,35 @@ struct GooglePlacesService {
         request.setValue(key, forHTTPHeaderField: "X-Goog-Api-Key")
         request.setValue(Self.fieldMask, forHTTPHeaderField: "X-Goog-FieldMask")
         request.setValue(Self.bundleID, forHTTPHeaderField: "X-Ios-Bundle-Identifier")
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return .failed(.decode) }
         request.httpBody = httpBody
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { return nil }
-            let decoded = try JSONDecoder().decode(GooglePlacesResponse.self, from: data)
-
-            let base = CLLocation(latitude: center.latitude, longitude: center.longitude)
-            let mapped = decoded.places.compactMap { $0.toPlace(base: base, center: center) }
-            guard !mapped.isEmpty else { return nil }
-
-            // Worst-first; final id (re)assignment is owned by PlacesProvider.reindex.
-            return Array(mapped.sorted { $0.rating < $1.rating }.prefix(limit))
+            guard let http = response as? HTTPURLResponse else { return .failed(.network) }
+            switch http.statusCode {
+            case 200..<300:
+                let decoded = try JSONDecoder().decode(GooglePlacesResponse.self, from: data)
+                let base = CLLocation(latitude: center.latitude, longitude: center.longitude)
+                let mapped = decoded.places.compactMap { $0.toPlace(base: base, center: center) }
+                guard !mapped.isEmpty else { return .empty }
+                // Worst-first; final id (re)assignment is owned by PlacesProvider.reindex.
+                return .success(Array(mapped.sorted { $0.rating < $1.rating }.prefix(limit)))
+            case 429:
+                return .rateLimited
+            case 403:
+                // Treat 403 (and any billing/permission body) as a billing failure.
+                return .failed(.billing)
+            default:
+                return .failed(.http(http.statusCode))
+            }
+        } catch is DecodingError {
+            return .failed(.decode)
+        } catch let e as URLError {
+            _ = e
+            return .failed(.network)
         } catch {
-            return nil
+            return .failed(.network)
         }
     }
 }

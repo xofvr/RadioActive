@@ -11,14 +11,22 @@ struct RootView: View {
     @State private var location = LocationService()
     @State private var heading = HeadingService()
     @State private var placesProvider = PlacesProvider()
+    @State private var settings = AppSettings()
     @State private var tab: AppTab
     @State private var detectorPath: [Place] = []
     @State private var mapPath: [Place] = []
     @State private var nearbyPath: [Place]
+    @State private var logPath: [Place] = []
     @State private var showAbout: Bool
     @State private var aboutIsFirstRun: Bool
+    @State private var showBoot: Bool
+    @State private var bootIsFirstRun: Bool
+    /// True once `beginScanning()` has run (location started, with a real fix or the
+    /// default-area fallback). Gates the live-ratings toggle so it never fetches at the
+    /// default coordinate while the first-run About sheet is still up, before BEGIN SCAN.
+    @State private var scanning = false
 
-    enum AppTab: Hashable { case detector, map, nearby }
+    enum AppTab: Hashable { case detector, map, nearby, log }
 
     init() {
         // Screenshot / UI-test affordance (never ships): launch with
@@ -43,13 +51,24 @@ struct RootView: View {
         #endif
         _showAbout = State(initialValue: !seenAbout)
         _aboutIsFirstRun = State(initialValue: !seenAbout)
+
+        // Boot overlay: long RobCo sequence on first run, short on return. Sits
+        // ABOVE the About sheet (see body's ZStack), so it always lands first.
+        var skipBoot = false
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "RAD_SKIP_BOOT") { skipBoot = true }
+        #endif
+        _showBoot = State(initialValue: !skipBoot)
+        _bootIsFirstRun = State(initialValue: !seenAbout)
     }
 
     var body: some View {
+        ZStack {
         TabView(selection: $tab) {
             Tab("Detector", systemImage: "gauge.with.dots.needle.bottom.50percent", value: AppTab.detector) {
                 NavigationStack(path: $detectorPath) {
                     DetectorScreen(engine: engine,
+                                   placesProvider: placesProvider,
                                    onAbout: { aboutIsFirstRun = false; showAbout = true })
                         .detailRoute(engine: engine, onDetect: detect)
                 }
@@ -70,14 +89,29 @@ struct RootView: View {
                         .detailRoute(engine: engine, onDetect: detect)
                 }
             }
+            Tab("Log", systemImage: "books.vertical", value: AppTab.log) {
+                NavigationStack(path: $logPath) {
+                    LogbookScreen(engine: engine)
+                        .detailRoute(engine: engine, onDetect: detect)
+                }
+            }
         }
+        .environment(settings)
         .tint(Theme.phosphor)
         // Honour Larger Text, but cap it so the pixel-instrument layouts hold.
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .overlay(CRTOverlay())
         .onAppear {
-            engine.onClick = { volume in
-                audio.click(volume)
+            // Mirror the live-ratings preference before the first scan, so the
+            // opening load already honours it (Google only when ON + configured).
+            placesProvider.liveRatingsEnabled = settings.liveRatings
+            engine.onClick = { [weak engine] volume in
+                // Hotter signal = brighter click. `engine.rads` is readable here
+                // (same module, MainActor) and biases the audio pitch upward.
+                // Weak capture mirrors the display-link path — engine stores this
+                // closure, so a strong capture would retain-cycle.
+                guard let engine else { return }
+                audio.click(volume, pitchBias: engine.rads)
                 haptics.click(volume)
             }
             engine.onAudioToggle = { on in
@@ -92,6 +126,18 @@ struct RootView: View {
         }
         // Compass: point the phone and the detector aims itself.
         .onChange(of: heading.heading) { engine.deviceHeading = heading.heading }
+        // Live-ratings kill switch. Keep the provider flag in sync always; only fetch
+        // once scanning has begun — on first run the toggle lives in the About sheet
+        // shown BEFORE BEGIN SCAN, and beginScanning()'s own load will honour the flag
+        // at the real location. A deliberate flip must take effect immediately, so it
+        // bypasses the 45s refetch floor (which refresh(force:) still honours) by
+        // loading directly — ON fetches real Google data at once, OFF returns to sim.
+        .onChange(of: settings.liveRatings) {
+            placesProvider.liveRatingsEnabled = settings.liveRatings
+            guard scanning else { return }
+            location.markFetched()
+            Task { await placesProvider.load(into: engine, near: location.coordinate, force: true) }
+        }
         // Clock 1: drift the radar/needle as you move. Clock 2: gated rediscovery.
         .onChange(of: location.updates) {
             engine.updateUser(location.coordinate)
@@ -102,7 +148,12 @@ struct RootView: View {
             location.stop()
             heading.stop()
         }
-        .sheet(isPresented: $showAbout) {
+        // Gate the About sheet behind the boot sequence. A UIKit-backed .sheet
+        // renders ABOVE any ZStack sibling regardless of zIndex, so presenting it
+        // while `showBoot` is true would cover the RobCo cold-start. Holding the
+        // sheet until boot finishes guarantees the boot always lands first.
+        .sheet(isPresented: Binding(get: { showAbout && !showBoot },
+                                    set: { showAbout = $0 })) {
             AboutSheet(isFirstRun: aboutIsFirstRun) {
                 if aboutIsFirstRun { beginScanning(); aboutIsFirstRun = false }
                 showAbout = false
@@ -110,11 +161,23 @@ struct RootView: View {
             // First run must be acknowledged — it's the disclaimer + permission primer.
             .interactiveDismissDisabled(aboutIsFirstRun)
         }
+
+        // Boot overlay sits on top of everything (including the About sheet), so
+        // the RobCo cold-start always plays first. Reveals the screen beneath on finish.
+        if showBoot {
+            BootSequenceView(isFirstRun: bootIsFirstRun) {
+                withAnimation(.easeOut(duration: 0.3)) { showBoot = false }
+            }
+            .transition(.opacity)
+            .zIndex(10)
+        }
+        }
     }
 
     /// Start location + compass (priming the permission prompt) and run the first scan.
     private func beginScanning() {
         UserDefaults.standard.set(true, forKey: "didShowAbout")
+        scanning = true
         location.start()
         heading.start()
         refresh(force: true)

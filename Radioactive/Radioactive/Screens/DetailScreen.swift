@@ -50,6 +50,9 @@ struct DetailScreen: View {
                     .ignoresSafeArea()
             }
         }
+        // Filing the place (false → true via the bookmark button) flashes the stamp.
+        // Verdict/histogram/stats stay ABSOLUTE — this is the only addition.
+        .logStamp(trigger: engine.isLogged(place))
     }
 
     // MARK: 1 — Header

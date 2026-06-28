@@ -1,4 +1,13 @@
+import CoreGraphics
 import Foundation
+
+/// Result of `DetectorMath.cluster`. `members[0] == representative` (the worst,
+/// since callers pass items worst-first). `count` is exposed for the "+N" badge.
+struct Cluster<Item> {
+    let representative: Item
+    let members: [Item]
+    var count: Int { members.count }
+}
 
 /// Pure, dependency-free detector maths — extracted from `DetectorEngine` so the
 /// error-prone bits (compass wrap-around, aim band, the relative-contaminant floor,
@@ -37,5 +46,54 @@ enum DetectorMath {
         let detection = prox * (0.4 + 0.6 * face)
         let value = badness * (0.62 + 0.38 * detection) * sensitivity
         return min(1, max(0, value))
+    }
+
+    /// Normalise `absolute` badness against the local spread (worst-nearby = 1, best = 0),
+    /// with a gentle gamma to lift the mid. Degenerate spread (range ≤ 0.05) → returns
+    /// `absolute` unchanged (never invents contrast from noise).
+    static func relativeBadness(_ absolute: Double, localBadnesses: [Double]) -> Double {
+        guard let lo = localBadnesses.min(), let hi = localBadnesses.max(),
+              hi - lo > 0.05 else { return absolute }
+        // Clamp BEFORE pow: an `absolute` outside [lo,hi] (e.g. a target beyond
+        // localRadius via aim(at:)) yields a negative norm, and pow(negative, 0.75)
+        // is NaN. Clamping first keeps in-range behaviour identical.
+        let norm = min(1, max(0, (absolute - lo) / (hi - lo)))
+        return pow(norm, 0.75)
+    }
+
+    /// Blend absolute and relative badness; `w` weights toward relative (≈0.6).
+    static func readingBadness(absolute: Double, relative: Double, w: Double = 0.6) -> Double {
+        min(1, max(0, absolute * (1 - w) + relative * w))
+    }
+
+    /// Distance (m) → 0.10…0.48 radial fraction of the scope / compass face.
+    /// Shared by radarPins() and CompassView so the mapping never drifts.
+    static func scopeRadiusFraction(distanceM: Double, maxM: Double = 560) -> Double {
+        0.10 + min(1, distanceM / maxM) * 0.38
+    }
+
+    /// Greedy O(n²) spatial clustering (≤20 items expected). Items must arrive
+    /// worst-first; the cluster seed (first encountered) becomes the representative.
+    /// `position` maps an item to a planar point; `minSeparation` is in that same unit
+    /// (≈0.08 scope-fraction for the radar, ≈25 m for the map).
+    static func cluster<Item>(_ items: [Item],
+                              position: (Item) -> CGPoint,
+                              minSeparation: Double) -> [Cluster<Item>] {
+        var used = [Bool](repeating: false, count: items.count)
+        var result: [Cluster<Item>] = []
+        for i in items.indices where !used[i] {
+            used[i] = true
+            var members = [items[i]]
+            let pi = position(items[i])
+            for j in (i + 1)..<items.count where !used[j] {
+                let pj = position(items[j])
+                if hypot(pj.x - pi.x, pj.y - pi.y) <= minSeparation {
+                    used[j] = true
+                    members.append(items[j])
+                }
+            }
+            result.append(Cluster(representative: items[i], members: members))
+        }
+        return result
     }
 }

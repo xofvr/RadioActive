@@ -61,12 +61,16 @@ final class GeigerAudio {
 
     // MARK: - Click
 
-    func click(_ volume: Double) {
+    /// `pitchBias` lifts the bandpass centre so hotter readings click brighter.
+    /// The default `0` leaves the legacy random-frequency behaviour unchanged.
+    func click(_ volume: Double, pitchBias: Double = 0) {
         guard enabled, let buffer = noiseBuffer as? AVAudioPCMBuffer else { return }
         guard engine.isRunning else { return }
 
-        // Randomise the bandpass centre so each tick has its own character.
-        eq.bands.first?.frequency = Float(900 + Double.random(in: 0...1) * 2200)
+        // Randomise the bandpass centre so each tick has its own character, then
+        // bias it upward by the reading so a hotter signal sounds brighter.
+        let base = 900 + Double.random(in: 0...1) * 2200
+        eq.bands.first?.frequency = Float(min(20_000, max(200, base * (1 + pitchBias))))
 
         let clamped = min(max(volume, 0), 1)
         player.volume = Float(clamped * 0.5)

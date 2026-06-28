@@ -8,10 +8,13 @@ struct AboutSheet: View {
     var isFirstRun: Bool
     var onPrimary: () -> Void
 
+    @Environment(AppSettings.self) private var settings
+
     private let contactEmail = "reports@radioactive.app"
 
     var body: some View {
-        ZStack {
+        @Bindable var settings = settings
+        return ZStack {
             Theme.bg.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -20,6 +23,23 @@ struct AboutSheet: View {
                     callout("This is NOT a food-safety, hygiene, or FSA rating, and makes no claim about the real quality, cleanliness, or safety of any business.")
                     if GooglePlacesConfig.isConfigured {
                         paragraph("Places are discovered via **Apple Maps (MapKit)** and scored from **Google** ratings. Where a place has a real Google rating the reading is real; any place without one stays **SIMULATED** — a deterministic stand-in, clearly flagged, never presented as a real rating.")
+                        Toggle(isOn: $settings.liveRatings) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("LIVE DATA — real Google ratings")
+                                    .font(Theme.mono(15))
+                                    .foregroundStyle(Theme.phosphorBright)
+                                Text("Off by default. Uses your Google quota only while on.")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.ink.opacity(0.7))
+                            }
+                        }
+                        .tint(Theme.phosphor)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.phosphor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.phosphor.opacity(0.35), lineWidth: 1))
+                        .accessibilityLabel("Live data, real Google ratings")
+                        .accessibilityValue(settings.liveRatings ? "On" : "Off")
                     } else {
                         paragraph("Places are discovered via **Apple Maps (MapKit)**. Until a verified ratings source is connected, every reading is **SIMULATED** — a deterministic stand-in, clearly flagged, never presented as a real rating.")
                     }

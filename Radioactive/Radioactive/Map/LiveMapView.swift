@@ -9,15 +9,27 @@ struct LiveMapView: View {
 
     @State private var camera: MapCameraPosition = .automatic
 
+    /// Contaminants clustered in geo-space (≈25 m). `members[0]` is the worst, so
+    /// the representative's badge COLOUR/NUMBER stay ABSOLUTE per the honesty rules.
+    private var clusters: [Cluster<Place>] {
+        DetectorMath.cluster(engine.contaminants, position: { p in
+            let c = p.coordinate(base: base)
+            let dx = (c.longitude - base.longitude) * cos(base.latitude * .pi / 180) * 111_320
+            let dy = (c.latitude - base.latitude) * 111_320
+            return CGPoint(x: dx, y: dy)            // metres
+        }, minSeparation: 25)
+    }
+
     var body: some View {
         Map(position: $camera) {
             Annotation("You", coordinate: base, anchor: .center) {
                 youMarker
             }
-            ForEach(engine.contaminants) { place in
+            ForEach(clusters, id: \.representative.id) { cluster in
+                let place = cluster.representative
                 Annotation(place.short, coordinate: place.coordinate(base: base), anchor: .bottom) {
                     NavigationLink(value: place) {
-                        badge(place)
+                        badge(place, count: cluster.count)
                     }
                     .buttonStyle(.plain)
                 }
@@ -45,8 +57,10 @@ struct LiveMapView: View {
         .accessibilityLabel("You are here")
     }
 
-    private func badge(_ place: Place) -> some View {
+    private func badge(_ place: Place, count: Int) -> some View {
+        // COLOUR + NUMBER are ABSOLUTE (place.badness / place.red) — never relative.
         let color = engine.color(place.badness, 0.95)
+        let isTarget = place.id == engine.target.id
         return VStack(spacing: 2) {
             Circle()
                 .fill(color)
@@ -57,17 +71,34 @@ struct LiveMapView: View {
                         .font(.system(size: 14, weight: .heavy))
                         .foregroundStyle(Theme.bgDeep)
                 )
+                .overlay(alignment: .topTrailing) {
+                    if count > 1 {
+                        Text("+\(count - 1)")
+                            .font(.system(size: 10, weight: .heavy))
+                            .foregroundStyle(Theme.bgDeep)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Theme.ink))
+                            .overlay(Capsule().stroke(.black.opacity(0.4), lineWidth: 1))
+                            .offset(x: 8, y: -6)
+                    }
+                }
                 .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-            Text(place.short)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(.black.opacity(0.6)))
-                .fixedSize()
+            if isTarget {
+                Text(place.short)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(.black.opacity(0.6)))
+                    .fixedSize()
+            }
         }
         .frame(minWidth: 44, minHeight: 44)
         .contentShape(Rectangle())
-        .accessibilityLabel("\(place.name), \(place.red) of 5 red stars")
+        .accessibilityLabel(
+            count > 1
+            ? "\(place.name), \(place.red) of 5 red stars, plus \(count - 1) more nearby"
+            : "\(place.name), \(place.red) of 5 red stars")
     }
 }

@@ -18,14 +18,23 @@ final class PlacesProvider {
     private(set) var didAttempt = false
     /// How many loaded places carry a REAL rating (vs a simulated stand-in).
     private(set) var matchedCount = 0
+    /// Google quota hit this cycle (HTTP 429) — we fell through to a SIM reading.
+    private(set) var throttled: Bool = false
+    /// The last Google failure reason (used to distinguish OFFLINE from a plain demo roster).
+    private(set) var lastReason: Reason? = nil
+    /// KILL-SWITCH: when false, the Google tier is skipped entirely (zero network calls).
+    /// Set by RootView from `AppSettings.liveRatings`.
+    var liveRatingsEnabled: Bool = false
 
     var statusLabel: String {
         if isLoading { return "SCANNING…" }
         switch source {
         case .google:      return "LIVE · GOOGLE"
         case .tripAdvisor: return "LIVE · TRIPADVISOR"
-        case .mapKit:      return "LIVE PLACES · SIM READING"
-        case .demo:        return "DEMO ROSTER"
+        case .mapKit:      return throttled ? "QUOTA THROTTLED · SIM READING"
+                                            : "LIVE PLACES · SIM READING"
+        case .demo:        return lastReason == .network ? "OFFLINE · DEMO ROSTER"
+                                                         : "DEMO ROSTER"
         }
     }
 
@@ -37,19 +46,39 @@ final class PlacesProvider {
         isLoading = true
         defer { isLoading = false; didAttempt = true }
 
-        // 1. REAL ratings via Google Places (New) when a key is configured — a single
-        //    Nearby Search returns nearby places already carrying real ratings.
-        if GooglePlacesConfig.isConfigured,
-           let rated = await GooglePlacesService().fetchPlaces(near: coordinate,
-                                                               radius: LocationService.cityRadius,
-                                                               limit: 20) {
-            let visible = reindex(rated, engine: engine)
-            if !visible.isEmpty {
-                matchedCount = visible.filter { $0.ratingSource == .real }.count
-                engine.setPlaces(visible, center: coordinate,
-                                 localRadius: LocationService.localRadius, force: force)
-                source = .google
-                return
+        // Reset per-cycle state up front so a stale outcome from a PRIOR load can never
+        // leak into this one's status (e.g. a 429 in an earlier cycle must not keep
+        // reporting "QUOTA THROTTLED" once a later .empty/.failed cycle replaces it).
+        // Each outcome below sets only what it is responsible for; an all-suppressed
+        // success (empty `visible`) leaves them cleared.
+        throttled = false
+        lastReason = nil
+        matchedCount = 0
+
+        // 1. REAL ratings via Google Places (New) — ONLY when a key is configured AND the
+        //    live-ratings kill-switch is ON. When the gate is false we skip the tier
+        //    entirely (no network call) and fall straight through to MapKit/demo. A single
+        //    Nearby Search returns nearby places already carrying real ratings. Any
+        //    non-success outcome records the throttle / reason and falls through to MapKit.
+        if GooglePlacesConfig.isConfigured && liveRatingsEnabled {
+            switch await GooglePlacesService().fetchPlaces(near: coordinate,
+                                                           radius: LocationService.cityRadius,
+                                                           limit: 20) {
+            case .success(let rated):
+                let visible = reindex(rated, engine: engine)
+                if !visible.isEmpty {
+                    matchedCount = visible.filter { $0.ratingSource == .real }.count
+                    engine.setPlaces(visible, center: coordinate,
+                                     localRadius: LocationService.localRadius, force: force)
+                    source = .google
+                    return
+                }
+            case .rateLimited:
+                throttled = true                        // fall through to MapKit
+            case .empty:
+                break                                   // fall through (state already clear)
+            case .failed(let r):
+                lastReason = r                          // fall through
             }
         }
 

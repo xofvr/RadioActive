@@ -12,11 +12,40 @@ import SwiftUI
 @Observable
 final class DetectorEngine {
 
+    // MARK: Shared constants
+    static let aimConeDegrees: Double = 26      // forward aim cone (== old `locked` literal)
+    static let aimHoldSeconds: TimeInterval = 6 // manual-selection hold cap
+
     // MARK: Settings
     var palette: Palette = .phosphor
     var sensitivity: Double = 1.0
     var autoScan = true
     var audioOn = false { didSet { onAudioToggle?(audioOn) } }
+
+    // Phase 2 — relative reading gate (default ON). Views may flip this from AppSettings.
+    var relativeReadingEnabled = true
+
+    // Phase 4 — dosimeter
+    private(set) var sessionRads: Double = 0     // resets per launch (fresh engine)
+    var discoveredKeys = Set<String>(UserDefaults.standard.stringArray(forKey: "discoveredKeys") ?? [])
+    var placesDiscovered: Int { discoveredKeys.count }
+
+    // Phase 4 — proximity heat
+    private(set) var radsTrend: RadsTrend = .steady
+    @ObservationIgnored private var radsFast = 0.35
+    @ObservationIgnored private var radsSlow = 0.35
+
+    // Phase 4 — field log snapshots (durable)
+    private(set) var loggedEntries: [LoggedEntry] = DetectorEngine.loadLoggedEntries()
+
+    // Phase 3 — manual-aim hold (gates aimByHeading auto-snap)
+    @ObservationIgnored private var aimHoldUntil: Date? = nil
+    /// WHY the hold was armed. `true` (cycleInCone) → cone-aware: the hold also clears
+    /// the instant the user points away from the held target's ±aimConeDegrees cone.
+    /// `false` (cycleTarget) → time-cap only: the picked target may sit OUTSIDE the cone,
+    /// so the heading-leaves-cone early-clear must NOT fire or the manual NEXT would be
+    /// overridden within one frame on a live compass.
+    @ObservationIgnored private var aimHoldStrict = false
 
     // MARK: Live, per-frame state
     private(set) var rads = 0.35
@@ -63,7 +92,7 @@ final class DetectorEngine {
     // MARK: Derived
     var target: Place { places[min(targetIndex, places.count - 1)] }
     var dangerScale: DangerScale { .forPalette(palette) }
-    var locked: Bool { angDiff(heading, target.bearing) < 26 }
+    var locked: Bool { angDiff(heading, target.bearing) < Self.aimConeDegrees }
 
     /// The tight "radius around you" set — what the Detector and Radar work within,
     /// worst-first. The Nearby/explore page uses the full `places` (city) set instead.
@@ -140,11 +169,23 @@ final class DetectorEngine {
 
     // MARK: Physics
 
+    /// Per-place RELATIVE reading badness, normalised against the local field so the
+    /// hero surfaces the WORST-nearby relatively. Gated by `relativeReadingEnabled`.
+    /// OFF → returns absolute Place.badness (the legacy reading).
+    func readingBadness(for p: Place) -> Double {
+        guard relativeReadingEnabled else { return p.badness }
+        let locals = localPlaces.map(\.badness)
+        let rel = DetectorMath.relativeBadness(p.badness, localBadnesses: locals)
+        return DetectorMath.readingBadness(absolute: p.badness, relative: rel)
+    }
+
     /// How hot a place reads given the current heading. Badness is the ceiling;
-    /// aim/proximity only swing the needle within that place's band.
+    /// aim/proximity only swing the needle within that place's band. The badness
+    /// fed in is the RELATIVE reading (gated by `relativeReadingEnabled`) so the
+    /// needle, colour, CPM, audio and status all surface the worst-nearby together.
     func intensity(for p: Place, heading: Double) -> Double {
         DetectorMath.intensity(
-            badness: p.badness,
+            badness: readingBadness(for: p),
             distance: Double(p.dist),
             headingError: angDiff(heading, p.bearing),
             sensitivity: sensitivity)
@@ -166,9 +207,21 @@ final class DetectorEngine {
         let intensity = intensity(for: tgt, heading: heading)
         rads += (intensity - rads) * min(1, dt * 5)
 
-        // Lock-acquired edge → one-shot "you found it" cue.
+        // Dosimeter + proximity trend ride the display link (no new timers).
+        sessionRads += rads * dt                                          // dosimeter
+        radsFast += (rads - radsFast) * min(1, dt * 3.0)                  // fast EWMA
+        radsSlow += (rads - radsSlow) * min(1, dt * 0.6)                  // slow EWMA
+        let d = radsFast - radsSlow
+        radsTrend = d > 0.02 ? .warmer : (d < -0.02 ? .cooler : .steady)
+
+        // Lock-acquired edge → one-shot "you found it" cue + discovery accrual.
         let nowLocked = locked
-        if nowLocked && !wasLocked { onLock?() }
+        if nowLocked && !wasLocked {
+            onLock?()
+            if discoveredKeys.insert(target.logKey).inserted {
+                UserDefaults.standard.set(Array(discoveredKeys), forKey: "discoveredKeys")
+            }
+        }
         wasLocked = nowLocked
 
         // Geiger clicks — Poisson-ish, rate climbs with the reading.
@@ -210,6 +263,38 @@ final class DetectorEngine {
             nextID = order[0]
         }
         if let i = places.firstIndex(where: { $0.id == nextID }) { targetIndex = i }
+        aimHoldStrict = false                                          // time-cap only: target may be out-of-cone
+        aimHoldUntil = Date().addingTimeInterval(Self.aimHoldSeconds)   // hold (survives live compass)
+    }
+
+    /// Local places whose bearing is inside the forward aim cone, worst-first
+    /// (localPlaces order preserved → stable cycling).
+    func targetsInCone(_ heading: Double) -> [Place] {
+        localPlaces.filter { angDiff(heading, $0.bearing) <= Self.aimConeDegrees }
+    }
+
+    /// Advance the active target to the next place inside the cone, and arm the hold.
+    func cycleInCone() {
+        let cone = targetsInCone(heading)
+        guard !cone.isEmpty else { return }
+        let nextID: Int
+        if let pos = cone.firstIndex(where: { $0.id == target.id }) {
+            nextID = cone[(pos + 1) % cone.count].id
+        } else { nextID = cone[0].id }
+        if let i = places.firstIndex(where: { $0.id == nextID }) { targetIndex = i }
+        aimHoldStrict = true                                           // cone-aware: target is always in-cone
+        aimHoldUntil = Date().addingTimeInterval(Self.aimHoldSeconds)   // hold
+    }
+
+    /// Compass blips — the contaminants, with relative reading colour + target flag.
+    func compassBlips() -> [CompassBlip] {
+        contaminants.map { p in
+            CompassBlip(place: p,
+                        bearing: p.bearing,
+                        distance: Double(p.dist),
+                        readingBadness: readingBadness(for: p),
+                        isTarget: p.id == target.id)
+        }
     }
 
     func aim(at place: Place) {
@@ -255,6 +340,19 @@ final class DetectorEngine {
     /// Compass mode: snap the active target to the local place you're pointing at, with
     /// hysteresis so the needle doesn't flicker between two adjacent venues.
     private func aimByHeading() {
+        // Honour a manual NEXT (cycleInCone / cycleTarget) until it expires OR the user
+        // physically points away from the held target's cone — then resume auto-snap.
+        if let until = aimHoldUntil {
+            let expired = Date() >= until
+            // Only a STRICT (cycleInCone) hold self-clears when the heading leaves the
+            // held target's cone — its target is always in-cone, so leaving it is a
+            // genuine intent to re-aim. A non-strict (cycleTarget) hold may have picked
+            // an out-of-cone target, so it must survive on the time cap alone.
+            let leftCone = aimHoldStrict && angDiff(heading, target.bearing) > Self.aimConeDegrees
+            if !expired && !leftCone { return }           // hold active: do not override
+            aimHoldUntil = nil                            // expired, or a strict hold left its cone
+        }
+
         let candidates = localPlaces
         guard let best = candidates.min(by: { angDiff(heading, $0.bearing) < angDiff(heading, $1.bearing) }) else { return }
         let current = target
@@ -274,10 +372,29 @@ final class DetectorEngine {
 
     func toggleLog(_ place: Place) {
         let key = place.logKey
-        if loggedKeys.contains(key) { loggedKeys.remove(key) } else { loggedKeys.insert(key) }
+        if loggedKeys.contains(key) {
+            loggedKeys.remove(key)
+            loggedEntries.removeAll { $0.logKey == key }
+        } else {
+            loggedKeys.insert(key)
+            loggedEntries.append(LoggedEntry(place))
+        }
         UserDefaults.standard.set(Array(loggedKeys), forKey: "loggedKeys")
+        persistLoggedEntries()
     }
     func isLogged(_ place: Place) -> Bool { loggedKeys.contains(place.logKey) }
+
+    private func persistLoggedEntries() {
+        if let data = try? JSONEncoder().encode(loggedEntries) {
+            UserDefaults.standard.set(data, forKey: "loggedEntries")
+        }
+    }
+    private static func loadLoggedEntries() -> [LoggedEntry] {
+        guard let data = UserDefaults.standard.data(forKey: "loggedEntries"),
+              let entries = try? JSONDecoder().decode([LoggedEntry].self, from: data)
+        else { return [] }
+        return entries
+    }
 
     func suppress(_ place: Place) {
         suppressedKeys.insert(place.logKey)
@@ -292,23 +409,46 @@ final class DetectorEngine {
     }
 
     func radarPins() -> [RadarPin] {
-        contaminants.map { p in
-            let rFrac = 0.10 + min(1, Double(p.dist) / 560) * 0.38
+        let raw = contaminants.map { p -> (place: Place, pt: CGPoint) in
+            let rFrac = DetectorMath.scopeRadiusFraction(distanceM: Double(p.dist))
             let rad = p.bearing * .pi / 180
-            return RadarPin(place: p,
-                            x: 0.5 + sin(rad) * rFrac,
-                            y: 0.5 - cos(rad) * rFrac)
+            return (p, CGPoint(x: 0.5 + sin(rad) * rFrac, y: 0.5 - cos(rad) * rFrac))
+        }
+        let clusters = DetectorMath.cluster(raw, position: { $0.pt }, minSeparation: 0.08)
+        return clusters.map { c in
+            RadarPin(place: c.representative.place,
+                     x: c.representative.pt.x,
+                     y: c.representative.pt.y,
+                     count: c.count,
+                     readingBadness: readingBadness(for: c.representative.place))
         }
     }
 }
 
+/// Proximity heat from fast-vs-slow rads EWMA.
+enum RadsTrend { case warmer, steady, cooler }
+
+/// A contaminant for the Pip-Boy compass. CompassView places it at
+/// (bearing − heading), radius by distance, colour by readingBadness.
+struct CompassBlip: Identifiable {
+    var id: Int { place.id }
+    let place: Place
+    let bearing: Double         // absolute compass bearing, deg, 0 = N
+    let distance: Double        // metres
+    let readingBadness: Double  // RELATIVE reading → blip colour
+    let isTarget: Bool          // the currently-aimed place
+}
+
 /// A contaminant placed on the radar scope by real bearing + distance.
-/// `x`/`y` are 0...1 fractions of the scope's bounding box.
+/// `x`/`y` are 0...1 fractions. `count` ≥1 (cluster size). `readingBadness`
+/// is the RELATIVE reading used for pin COLOUR (number stays place.red).
 struct RadarPin: Identifiable {
     var id: Int { place.id }
     let place: Place
     let x: Double
     let y: Double
+    let count: Int             // NEW
+    let readingBadness: Double // NEW
 }
 
 /// Bridges `CADisplayLink`'s ObjC selector target to a Swift closure.
