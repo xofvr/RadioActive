@@ -22,6 +22,11 @@ struct Place: Identifiable, Hashable {
     /// real native place card (and dedupe across refetches). nil otherwise.
     var mapItemID: String? = nil
 
+    /// A non-Apple provider's stable identifier (e.g. `"google:ChIJ…"`) when the place
+    /// was discovered through a ratings provider rather than MapKit. Gives bookmarks +
+    /// suppression a stable key even though such places carry no `mapItemID`.
+    var providerID: String? = nil
+
     /// Where this place's RATING came from. Drives the honesty affordance.
     var ratingSource: RatingSource = .real
 
@@ -34,9 +39,9 @@ struct Place: Identifiable, Hashable {
     var badness: Double { (5 - rating) / 5 }
 
     /// Stable identity for bookmarking + suppression across rescans. `id` is reassigned
-    /// 0…n on every fetch, so it must NOT be used as identity; `mapItemID` (Apple) and
-    /// demo names are stable.
-    var logKey: String { mapItemID ?? "demo:\(name)" }
+    /// 0…n on every fetch, so it must NOT be used as identity; `mapItemID` (Apple),
+    /// `providerID` (e.g. Google) and demo names are stable.
+    var logKey: String { mapItemID ?? providerID ?? "demo:\(name)" }
 
     var distLabel: String { "\(dist) m" }
     var ratingLabel: String { String(format: "%.1f", rating) }

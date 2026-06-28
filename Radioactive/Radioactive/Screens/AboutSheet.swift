@@ -18,7 +18,11 @@ struct AboutSheet: View {
                     header
                     paragraph("RADIOACTIVE is a **novelty toy**. It finds nearby food & drink places and flips their public star ratings — the **lower** the rating, the **hotter** it reads here. Red stars, “rads” and Geiger clicks are an inverted re-score for entertainment.")
                     callout("This is NOT a food-safety, hygiene, or FSA rating, and makes no claim about the real quality, cleanliness, or safety of any business.")
-                    paragraph("Places are discovered via **Apple Maps (MapKit)**. Until a verified ratings source is connected, every reading is **SIMULATED** — a deterministic stand-in, clearly flagged, never presented as a real rating.")
+                    if GooglePlacesConfig.isConfigured {
+                        paragraph("Places are discovered via **Apple Maps (MapKit)** and scored from **Google** ratings. Where a place has a real Google rating the reading is real; any place without one stays **SIMULATED** — a deterministic stand-in, clearly flagged, never presented as a real rating.")
+                    } else {
+                        paragraph("Places are discovered via **Apple Maps (MapKit)**. Until a verified ratings source is connected, every reading is **SIMULATED** — a deterministic stand-in, clearly flagged, never presented as a real rating.")
+                    }
                     paragraph("Found something wrong? Tap **Report / request removal** on any place, or email **\(contactEmail)** and we'll take it down.")
                     primaryButton
                 }

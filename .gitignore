@@ -17,3 +17,7 @@ xcuserdata/
 *.ipa
 *.dSYM.zip
 *.dSYM
+
+# Secrets (key bundled into build, kept out of git)
+Secrets.plist
+!Secrets.plist.example
