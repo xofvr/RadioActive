@@ -158,6 +158,10 @@ struct RootView: View {
                 if aboutIsFirstRun { beginScanning(); aboutIsFirstRun = false }
                 showAbout = false
             }
+            // A .sheet presents in its own environment and does NOT inherit the
+            // .environment(settings) applied to the TabView, so AboutSheet's
+            // @Environment(AppSettings.self) read would trap. Re-inject it here.
+            .environment(settings)
             // First run must be acknowledged — it's the disclaimer + permission primer.
             .interactiveDismissDisabled(aboutIsFirstRun)
         }
