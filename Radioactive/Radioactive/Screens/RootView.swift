@@ -25,6 +25,11 @@ struct RootView: View {
     /// default-area fallback). Gates the live-ratings toggle so it never fetches at the
     /// default coordinate while the first-run About sheet is still up, before BEGIN SCAN.
     @State private var scanning = false
+    /// Drives the battery pause. Only `.background` stops the instrument — NOT the
+    /// transient `.inactive` of Control Center / notification banners / the app switcher,
+    /// so a peek never freezes the compass or re-flashes CALIBRATE on the magnetometer's
+    /// cold-start reading.
+    @Environment(\.scenePhase) private var scenePhase
 
     enum AppTab: Hashable { case detector, map, nearby, log }
 
@@ -101,10 +106,15 @@ struct RootView: View {
         // Honour Larger Text, but cap it so the pixel-instrument layouts hold.
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .overlay(CRTOverlay())
+        // The device housing — a fixed bezel framing the glass, on top of the scanlines.
+        .overlay(PipBoyBezel())
         .onAppear {
             // Mirror the live-ratings preference before the first scan, so the
             // opening load already honours it (Google only when ON + configured).
             placesProvider.liveRatingsEnabled = settings.liveRatings
+            // Haptics are INDEPENDENT of audio — silent tactile detection is the whole
+            // feel of a handheld Geiger counter, so enable them straight from the setting.
+            haptics.setEnabled(settings.haptics)
             engine.onClick = { [weak engine] volume in
                 // Hotter signal = brighter click. `engine.rads` is readable here
                 // (same module, MainActor) and biases the audio pitch upward.
@@ -114,11 +124,12 @@ struct RootView: View {
                 audio.click(volume, pitchBias: engine.rads)
                 haptics.click(volume)
             }
-            engine.onAudioToggle = { on in
-                audio.setEnabled(on)
-                haptics.setEnabled(on)
-            }
-            engine.onLock = { haptics.click(1.0) }
+            // The audio toggle drives ONLY audio now — haptics are enabled independently
+            // above and via .onChange(of: settings.haptics), so the detector buzzes even
+            // with sound off.
+            engine.onAudioToggle = { on in audio.setEnabled(on) }
+            // Distinct "you found it" buzz on lock — clearly different from a geiger click.
+            engine.onLock = { haptics.acquire() }
             engine.start()
             // Returning users start scanning straight away; first-run waits for the
             // About sheet's BEGIN SCAN so the location prompt arrives with context.
@@ -126,6 +137,16 @@ struct RootView: View {
         }
         // Compass: point the phone and the detector aims itself.
         .onChange(of: heading.heading) { engine.deviceHeading = heading.heading }
+        // Compass CONFIDENCE: feed the accuracy magnitude + calibration flag so the
+        // detector widens its aim cone and never claims more certainty than it has.
+        // iOS keeps showing its own figure-8 HUD (locationManagerShouldDisplayHeading-
+        // Calibration = true); our CALIBRATE chip is the persistent, less-jarring hint.
+        .onChange(of: heading.accuracy) {
+            engine.setHeadingConfidence(accuracy: heading.accuracy, calibrating: heading.needsCalibration)
+        }
+        .onChange(of: heading.needsCalibration) {
+            engine.setHeadingConfidence(accuracy: heading.accuracy, calibrating: heading.needsCalibration)
+        }
         // Live-ratings kill switch. Keep the provider flag in sync always; only fetch
         // once scanning has begun — on first run the toggle lives in the About sheet
         // shown BEFORE BEGIN SCAN, and beginScanning()'s own load will honour the flag
@@ -138,10 +159,27 @@ struct RootView: View {
             location.markFetched()
             Task { await placesProvider.load(into: engine, near: location.coordinate, force: true) }
         }
+        // Haptics toggle — live-apply, independent of the audio toggle.
+        .onChange(of: settings.haptics) { haptics.setEnabled(settings.haptics) }
         // Clock 1: drift the radar/needle as you move. Clock 2: gated rediscovery.
         .onChange(of: location.updates) {
             engine.updateUser(location.coordinate)
             refresh()
+        }
+        // Battery: stop the 60fps engine + GPS + compass while backgrounded, and resume
+        // on return — but only if scanning already began (don't wake GPS/compass before
+        // first-run BEGIN SCAN). `.inactive` is deliberately left running (see scenePhase).
+        // Idempotent: engine.start() guards link == nil; heading.start() guards
+        // headingAvailable(); coexists with the view-level .onDisappear stop below.
+        .onChange(of: scenePhase) {
+            switch scenePhase {
+            case .background:
+                engine.stop(); location.stop(); heading.stop()
+            case .active where scanning:
+                engine.start(); location.start(); heading.start()
+            default:
+                break
+            }
         }
         .onDisappear {
             engine.stop()

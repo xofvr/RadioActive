@@ -75,7 +75,17 @@ final class DetectorEngine {
     /// Live device heading (degrees) when a compass is available — point the phone at a
     /// place and the detector aims itself. `nil` ⇒ no compass (Simulator) ⇒ demo sweep.
     @ObservationIgnored var deviceHeading: Double? = nil
+    /// Live heading-accuracy magnitude (degrees, lower = better; `nil` ⇒ invalid). Read
+    /// PER-FRAME inside the detector face's `TimelineView` for the widening cone — hence
+    /// `@ObservationIgnored` (mirrors `deviceHeading`): it must not churn Observation.
+    @ObservationIgnored var headingAccuracyDeg: Double? = nil
     @ObservationIgnored private var wasLocked = false
+
+    /// How much to trust the compass — derived from the accuracy magnitude + the
+    /// calibration flag via `setHeadingConfidence`. OBSERVED (not `@ObservationIgnored`):
+    /// the CALIBRATE chip and the lock react to it, and it changes rarely so no churn.
+    /// Defaults `.good` so the Simulator/demo-sweep path (no heading updates) still locks.
+    private(set) var headingConfidence: HeadingConfidence = .good
 
     // MARK: Internals
     @ObservationIgnored private var spike = 0.0
@@ -92,7 +102,11 @@ final class DetectorEngine {
     // MARK: Derived
     var target: Place { places[min(targetIndex, places.count - 1)] }
     var dangerScale: DangerScale { .forPalette(palette) }
-    var locked: Bool { angDiff(heading, target.bearing) < Self.aimConeDegrees }
+    /// HONEST lock: never assert acquisition while the magnetometer is untrustworthy.
+    /// An `.invalid` confidence suppresses "TARGET ACQUIRED", the `onLock` cue, and the
+    /// discovery accrual (all keyed off this in `tick`). The Simulator/demo path keeps
+    /// `.good` (no heading updates) so its sweep still locks.
+    var locked: Bool { headingConfidence != .invalid && angDiff(heading, target.bearing) < Self.aimConeDegrees }
 
     /// The tight "radius around you" set — what the Detector and Radar work within,
     /// worst-first. The Nearby/explore page uses the full `places` (city) set instead.
@@ -193,6 +207,17 @@ final class DetectorEngine {
 
     func angDiff(_ a: Double, _ b: Double) -> Double { DetectorMath.angDiff(a, b) }
 
+    /// Store the latest heading accuracy (degrees; `nil` ⇒ invalid) + calibration flag
+    /// and derive the trust enum. Wired from RootView on `heading.accuracy` /
+    /// `heading.needsCalibration` changes; the per-frame cone reads `headingAccuracyDeg`.
+    func setHeadingConfidence(accuracy: Double?, calibrating: Bool) {
+        headingAccuracyDeg = accuracy                                 // ObservationIgnored: free
+        // Only WRITE the observed enum on a genuine transition — accuracy jitters every
+        // heading update, but @Observable notifies on every set, so guard the churn.
+        let c = DetectorMath.headingConfidence(accuracyDeg: accuracy, calibrating: calibrating)
+        if c != headingConfidence { headingConfidence = c }
+    }
+
     private func tick(dt: Double) {
         // Heading: the real device compass when available (point-to-scan), smoothed to
         // avoid jitter; else the demo sweep so the Simulator still animates.
@@ -286,15 +311,36 @@ final class DetectorEngine {
         aimHoldUntil = Date().addingTimeInterval(Self.aimHoldSeconds)   // hold
     }
 
-    /// Compass blips — the contaminants, with relative reading colour + target flag.
+    /// Compass blips — the contaminants, clustered in ABSOLUTE bearing space (so clusters
+    /// stay put as you rotate — the face merely rotates them by heading at render time) to
+    /// declutter a dense street. The currently-aimed target is NEVER folded into a cluster:
+    /// it's rendered standalone so the thing you're pointing at can't vanish into a "+N" dot.
     func compassBlips() -> [CompassBlip] {
-        contaminants.map { p in
+        let hot = contaminants
+        // Planar position on the face from ABSOLUTE bearing + distance — the same mapping
+        // radarPins() and the detector face use, so clustering matches what's drawn.
+        func point(_ p: Place) -> CGPoint {
+            let rFrac = DetectorMath.scopeRadiusFraction(distanceM: Double(p.dist))
+            let rad = p.bearing * .pi / 180
+            return CGPoint(x: 0.5 + sin(rad) * rFrac, y: 0.5 - cos(rad) * rFrac)
+        }
+        func blip(_ p: Place, count: Int) -> CompassBlip {
             CompassBlip(place: p,
                         bearing: p.bearing,
                         distance: Double(p.dist),
                         readingBadness: readingBadness(for: p),
-                        isTarget: p.id == target.id)
+                        isTarget: p.id == target.id,
+                        count: count)
         }
+        // Target-safe: cluster only the non-target contaminants (worst-first order kept),
+        // then append the target — if it is itself a contaminant — as its own blip.
+        let others = hot.filter { $0.id != target.id }
+        let clusters = DetectorMath.cluster(others, position: point, minSeparation: 0.08)
+        var blips = clusters.map { blip($0.representative, count: $0.count) }
+        if let t = hot.first(where: { $0.id == target.id }) {
+            blips.append(blip(t, count: 1))
+        }
+        return blips
     }
 
     func aim(at place: Place) {
@@ -428,8 +474,8 @@ final class DetectorEngine {
 /// Proximity heat from fast-vs-slow rads EWMA.
 enum RadsTrend { case warmer, steady, cooler }
 
-/// A contaminant for the Pip-Boy compass. CompassView places it at
-/// (bearing − heading), radius by distance, colour by readingBadness.
+/// A contaminant for the Pip-Boy detector face — placed at (bearing − heading),
+/// radius by distance, colour by readingBadness.
 struct CompassBlip: Identifiable {
     var id: Int { place.id }
     let place: Place
@@ -437,6 +483,7 @@ struct CompassBlip: Identifiable {
     let distance: Double        // metres
     let readingBadness: Double  // RELATIVE reading → blip colour
     let isTarget: Bool          // the currently-aimed place
+    let count: Int              // cluster size (≥1); >1 renders a "+N" badge
 }
 
 /// A contaminant placed on the radar scope by real bearing + distance.

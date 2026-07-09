@@ -9,6 +9,11 @@ struct Cluster<Item> {
     var count: Int { members.count }
 }
 
+/// How much to trust the compass right now. CoreLocation semantics:
+/// `CLHeading.headingAccuracy` is negative (⇒ nil upstream) when invalid; otherwise
+/// positive degrees, lower = better. Top-level so the engine and detector face share it.
+enum HeadingConfidence { case good, low, invalid }
+
 /// Pure, dependency-free detector maths — extracted from `DetectorEngine` so the
 /// error-prone bits (compass wrap-around, aim band, the relative-contaminant floor,
 /// the intensity model) can be unit-tested without the SwiftUI/CADisplayLink engine.
@@ -27,6 +32,29 @@ enum DetectorMath {
         var delta = (target - current).truncatingRemainder(dividingBy: 360)
         if delta > 180 { delta -= 360 } else if delta < -180 { delta += 360 }
         return (current + delta * factor + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    // MARK: Heading confidence
+
+    /// Aim-confidence thresholds (degrees of `CLHeading.headingAccuracy`, lower = better).
+    /// First estimates — kept as named constants so they can be tuned on-device.
+    static let headingLowThreshold: Double = 20      // > this ⇒ degrading (low)
+    static let headingInvalidThreshold: Double = 35  // > this ⇒ untrustworthy (invalid)
+    static let headingConeMax: Double = 60           // widest the aim cone ever opens
+
+    static func headingConfidence(accuracyDeg: Double?, calibrating: Bool) -> HeadingConfidence {
+        guard let a = accuracyDeg, a >= 0 else { return .invalid }   // negative/nil ⇒ invalid
+        if calibrating || a > headingInvalidThreshold { return .invalid }
+        if a > headingLowThreshold { return .low }
+        return .good
+    }
+
+    /// Aim-cone half-angle: floored at `base` (the honest lock cone), widening toward
+    /// `max` as accuracy degrades; invalid/nil ⇒ fully open. The band VISIBLY widens as
+    /// confidence drops — a real detector's confidence arc.
+    static func coneHalfAngle(accuracyDeg: Double?, base: Double, max maxAngle: Double = headingConeMax) -> Double {
+        guard let a = accuracyDeg, a >= 0 else { return maxAngle }
+        return Swift.min(maxAngle, Swift.max(base, a))
     }
 
     /// Relative "contamination" bar: the median badness, clamped to [0.35, 0.6], so the
@@ -67,7 +95,7 @@ enum DetectorMath {
     }
 
     /// Distance (m) → 0.10…0.48 radial fraction of the scope / compass face.
-    /// Shared by radarPins() and CompassView so the mapping never drifts.
+    /// Shared by radarPins() and the detector face so the mapping never drifts.
     static func scopeRadiusFraction(distanceM: Double, maxM: Double = 560) -> Double {
         0.10 + min(1, distanceM / maxM) * 0.38
     }

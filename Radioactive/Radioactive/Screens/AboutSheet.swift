@@ -43,6 +43,23 @@ struct AboutSheet: View {
                     } else {
                         paragraph("Places are discovered via **Apple Maps (MapKit)**. Until a verified ratings source is connected, every reading is **SIMULATED** — a deterministic stand-in, clearly flagged, never presented as a real rating.")
                     }
+                    Toggle(isOn: $settings.haptics) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("HAPTICS — tactile detection")
+                                .font(Theme.mono(15))
+                                .foregroundStyle(Theme.phosphorBright)
+                            Text("Geiger clicks and the lock cue buzz — works with sound off.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.ink.opacity(0.7))
+                        }
+                    }
+                    .tint(Theme.phosphor)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.phosphor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.phosphor.opacity(0.35), lineWidth: 1))
+                    .accessibilityLabel("Haptics, tactile detection")
+                    .accessibilityValue(settings.haptics ? "On" : "Off")
                     paragraph("Found something wrong? Tap **Report / request removal** on any place, or email **\(contactEmail)** and we'll take it down.")
                     primaryButton
                 }

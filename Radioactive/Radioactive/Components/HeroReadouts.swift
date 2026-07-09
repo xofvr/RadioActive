@@ -72,3 +72,54 @@ struct ProximityCue: View {
         .foregroundStyle(color)
     }
 }
+
+/// The live counts-per-minute readout — the RELATIVE reading (colour flows from
+/// `engine.rads`, never the absolute `Place.red`). Its own `TimelineView(.animation)`
+/// touching `engine.frame` so the per-frame CPM churn invalidates ONLY this label, not
+/// the whole detector face. Sized off `size` so it can shrink into the core cluster.
+struct CPMReadout: View {
+    var engine: DetectorEngine
+    var size: CGFloat = 26
+
+    var body: some View {
+        TimelineView(.animation) { _ in
+            _ = engine.frame
+            let value = min(999, Int(engine.cpmDisplay))
+            return HStack(spacing: 5) {
+                Text(String(format: "%03d", value))
+                    .font(Theme.mono(size))
+                    .foregroundStyle(engine.color(engine.rads))
+                    .phosphorGlow(engine.color(engine.rads), radius: 6)
+                Text("CPM")
+                    .font(Theme.mono(size * 0.77))
+                    .foregroundStyle(Theme.phosphor.opacity(0.4))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(value) counts per minute")
+        }
+    }
+}
+
+/// The one-word signal verdict — "HOT SIGNAL / ELEVATED / FAINT TRACE" in
+/// `engine.statusColor`. The RELATIVE reading again; isolated in its own
+/// `TimelineView` so its per-frame `rads` dependency doesn't drag the whole face.
+struct StatusWord: View {
+    var engine: DetectorEngine
+    var size: CGFloat = 14
+
+    var body: some View {
+        TimelineView(.animation) { _ in
+            _ = engine.frame
+            return Text(engine.status.label)
+                .font(Theme.mono(size))
+                .tracking(1)
+                .foregroundStyle(engine.statusColor)
+                .phosphorGlow(engine.statusColor, radius: 3)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .accessibilityLabel(engine.status.label)
+        }
+    }
+}

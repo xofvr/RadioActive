@@ -94,4 +94,38 @@ final class Haptics {
             // A dropped tick is harmless; never propagate.
         }
     }
+
+    // MARK: - Acquire
+
+    /// A DISTINCT "target acquired" cue: two full-intensity transients ~80ms apart with
+    /// rising sharpness (0.4 → 0.9), so a lock feels clearly different from a single
+    /// geiger `click`. Same guards ⇒ the Simulator no-op is preserved.
+    func acquire() {
+        guard Self.supportsHaptics, enabled, let engine else { return }
+
+        let events = [
+            CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: 1),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.4)
+                ],
+                relativeTime: 0),
+            CHHapticEvent(
+                eventType: .hapticTransient,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: 1),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.9)
+                ],
+                relativeTime: 0.08),
+        ]
+
+        do {
+            let pattern = try CHHapticPattern(events: events, parameters: [])
+            let playerNode = try engine.makePlayer(with: pattern)
+            try playerNode.start(atTime: CHHapticTimeImmediate)
+        } catch {
+            // A dropped cue is harmless; never propagate.
+        }
+    }
 }

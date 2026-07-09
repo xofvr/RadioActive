@@ -7,10 +7,6 @@ import Observation
 @MainActor
 @Observable
 final class AppSettings {
-    /// Compass hero instead of the analog gauge. Default false.
-    var useCompass: Bool {
-        didSet { UserDefaults.standard.set(useCompass, forKey: Keys.useCompass) }
-    }
     /// Relative (normalised-to-local-field) reading. Default true.
     var relativeReading: Bool {
         didSet { UserDefaults.standard.set(relativeReading, forKey: Keys.relativeReading) }
@@ -21,17 +17,22 @@ final class AppSettings {
     var liveRatings: Bool {
         didSet { UserDefaults.standard.set(liveRatings, forKey: Keys.liveRatings) }
     }
+    /// Tactile detection — Geiger clicks + the lock cue buzz. Default true, and
+    /// independent of audio, so silent handheld scanning works out of the box.
+    var haptics: Bool {
+        didSet { UserDefaults.standard.set(haptics, forKey: Keys.haptics) }
+    }
 
     init() {
         let d = UserDefaults.standard
-        useCompass      = d.object(forKey: Keys.useCompass) as? Bool ?? false
         relativeReading = d.object(forKey: Keys.relativeReading) as? Bool ?? true
         liveRatings     = d.object(forKey: Keys.liveRatings) as? Bool ?? false
+        haptics         = d.object(forKey: Keys.haptics) as? Bool ?? true
     }
 
     private enum Keys {
-        static let useCompass = "settings.useCompass"
         static let relativeReading = "settings.relativeReading"
         static let liveRatings = "settings.liveRatings"
+        static let haptics = "settings.haptics"
     }
 }

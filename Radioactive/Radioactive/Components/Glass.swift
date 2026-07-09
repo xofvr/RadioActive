@@ -13,10 +13,12 @@ extension View {
     }
 
     /// Dark inset instrument-panel surface (gradient fill + phosphor hairline).
+    /// Continuous ("squircle") corners so the housing hugs the modern curved-screen
+    /// phone rather than reading as a boxy retro rectangle.
     func instrumentPanel(cornerRadius: CGFloat = 6, strokeOpacity: Double = 0.30) -> some View {
-        background(Theme.panel, in: RoundedRectangle(cornerRadius: cornerRadius))
+        background(Theme.panel, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Theme.phosphor.opacity(strokeOpacity), lineWidth: 1)
             )
     }
